@@ -54,6 +54,42 @@ final class NemotronMultilingualTests: XCTestCase {
         XCTAssertEqual(currentAgain, "es-419")
     }
 
+    // MARK: - Soft (early) language pick
+
+    /// English mass split across en-US/en/en-GB must AGGREGATE and beat a single
+    /// higher-scoring es-ES token — the whole point of primary-subtag pooling.
+    func testSoftLanguagePickAggregatesByPrimarySubtag() {
+        let pick = StreamingNemotronMultilingualAsrManager.softLanguagePick(from: [
+            ("en-US", 3.0), ("en", 2.5), ("en-GB", 2.0), ("es-ES", 3.2), ("fr-FR", -1.0),
+        ])
+        XCTAssertEqual(pick?.primary, "en", "pooled en mass should win over a single higher es token")
+        XCTAssertEqual(pick?.piece, "en-US", "best-scoring piece within the winning primary")
+        XCTAssertGreaterThan(pick?.confidence ?? 0, 0.5)
+    }
+
+    /// A clearly dominant single language yields near-1 confidence.
+    func testSoftLanguagePickConfidentSingleLanguage() {
+        let pick = StreamingNemotronMultilingualAsrManager.softLanguagePick(from: [
+            ("es-419", 8.0), ("en-US", -2.0), ("fr-FR", -3.0),
+        ])
+        XCTAssertEqual(pick?.piece, "es-419")
+        XCTAssertEqual(pick?.primary, "es")
+        XCTAssertGreaterThan(pick?.confidence ?? 0, 0.9)
+    }
+
+    /// A near-tie between two primaries keeps confidence low (so the caller's
+    /// threshold rejects it) — guards against flipping on noisy early frames.
+    func testSoftLanguagePickAmbiguousIsLowConfidence() {
+        let pick = StreamingNemotronMultilingualAsrManager.softLanguagePick(from: [
+            ("en-US", 1.0), ("es-ES", 1.0),
+        ])
+        XCTAssertLessThan(pick?.confidence ?? 1, 0.6)
+    }
+
+    func testSoftLanguagePickEmptyReturnsNil() {
+        XCTAssertNil(StreamingNemotronMultilingualAsrManager.softLanguagePick(from: []))
+    }
+
     func testConfigLoadFromMetadata() throws {
         // Stand-in metadata.json matching the multilingual build format.
         let json: [String: Any] = [
