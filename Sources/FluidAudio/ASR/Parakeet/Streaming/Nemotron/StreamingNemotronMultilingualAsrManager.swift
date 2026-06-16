@@ -809,6 +809,8 @@ public actor StreamingNemotronMultilingualAsrManager {
         audioBufferOffset = 0
         firstDetectedLanguage = nil
         currentDetectedLanguageValue = nil
+        softLanguageCandidate = nil
+        softLanguageCandidateFrames = 0
         do {
             try resetStates()
         } catch {
@@ -1120,4 +1122,110 @@ public actor StreamingNemotronMultilingualAsrManager {
     /// re-detects language mid-stream, comparing this to the turn's opening
     /// language is a precise, model-native signal for a speaker language switch.
     public func currentDetectedLanguage() -> String? { currentDetectedLanguageValue }
+
+    // MARK: - Soft (early) language detection
+
+    /// Softmax confidence (mass on the winning PRIMARY language among all lang
+    /// tags) required before a soft reading is accepted. Guards against the noisy
+    /// first frames of an utterance.
+    private static let softLanguageConfidenceThreshold: Float = 0.45
+    /// Consecutive confident frames agreeing on the same primary language before
+    /// the soft reading flips `currentDetectedLanguageValue`.
+    private static let softLanguageDebounceFrames = 2
+
+    /// Lazily-built map: lang-tag token id → its language piece (e.g. 397 → "es-419").
+    /// Model-static, so it survives `reset()`.
+    private var langTagIdToLanguageCache: [Int: String]?
+    /// Debounce state for the soft reading (primary subtag + agreeing-frame count).
+    private var softLanguageCandidate: String?
+    private var softLanguageCandidateFrames = 0
+
+    private static func primarySubtag(_ code: String) -> String {
+        let normalized = code.replacingOccurrences(of: "_", with: "-")
+        return normalized.split(separator: "-").first.map { $0.lowercased() } ?? normalized.lowercased()
+    }
+
+    private func langTagIdToLanguage(_ tokenizer: NemotronMultilingualTokenizer) -> [Int: String] {
+        if let cached = langTagIdToLanguageCache { return cached }
+        var map: [Int: String] = [:]
+        for id in config.langTagTokenIds {
+            if let piece = tokenizerPiece(forId: id, tokenizer: tokenizer) {
+                map[id] = NemotronMultilingualTokenizer.stripAngleBrackets(piece)
+            }
+        }
+        langTagIdToLanguageCache = map
+        return map
+    }
+
+    /// Read the model's language BELIEF from a decode step's logits — the argmax
+    /// over JUST the lang-tag tokens, softmax-gated and debounced — and record it
+    /// as the current language. Unlike `recordDetectedLanguage`, which fires only
+    /// when a lang-tag token wins the FULL-vocab argmax (rare, and only near a
+    /// segment's end), this surfaces the language from the first frames of speech:
+    /// the model's relative preference *among the lang tags* is present in the
+    /// logits long before it actually emits the tag token.
+    ///
+    /// Confidence is computed on PRIMARY-subtag mass (so "en-US"/"en"/"en-GB"
+    /// reinforce each other instead of splitting the vote). `logits` is one
+    /// decode step's full-vocab logits (flat, index == token id, float32 — the
+    /// same layout `findMaxIndex` assumes). No-op for a fused argmax-only path
+    /// (no logits) or non-float32 logits.
+    internal func recordSoftLanguage(
+        fromLogits logits: MLMultiArray, tokenizer: NemotronMultilingualTokenizer
+    ) {
+        let map = langTagIdToLanguage(tokenizer)
+        guard !map.isEmpty, logits.dataType == .float32 else { return }
+        let count = logits.count
+        let ptr = logits.dataPointer.bindMemory(to: Float.self, capacity: count)
+
+        var candidates: [(piece: String, logit: Float)] = []
+        candidates.reserveCapacity(map.count)
+        for (id, piece) in map where id < count {
+            candidates.append((piece, ptr[id]))
+        }
+        guard let pick = Self.softLanguagePick(from: candidates),
+            pick.confidence >= Self.softLanguageConfidenceThreshold
+        else { return }
+
+        if softLanguageCandidate == pick.primary {
+            softLanguageCandidateFrames += 1
+        } else {
+            softLanguageCandidate = pick.primary
+            softLanguageCandidateFrames = 1
+        }
+        guard softLanguageCandidateFrames >= Self.softLanguageDebounceFrames else { return }
+        if firstDetectedLanguage == nil { firstDetectedLanguage = pick.piece }
+        currentDetectedLanguageValue = pick.piece
+    }
+
+    /// Pure pick over `(langTagPiece, logit)` pairs: the dominant PRIMARY language
+    /// by aggregated softmax mass (so "en-US"/"en"/"en-GB" reinforce rather than
+    /// split the vote), the best-scoring piece within it, and that primary's mass
+    /// fraction as confidence. Returns nil for an empty set. Separated from the
+    /// CoreML buffer read so the gating math is unit-testable without a model.
+    static func softLanguagePick(
+        from candidates: [(piece: String, logit: Float)]
+    ) -> (piece: String, primary: String, confidence: Float)? {
+        guard let maxLogit = candidates.map(\.logit).max() else { return nil }
+        var massByPrimary: [String: Float] = [:]
+        var bestPieceByPrimary: [String: (piece: String, logit: Float)] = [:]
+        var total: Float = 0
+        for candidate in candidates {
+            let primary = primarySubtag(candidate.piece)
+            total += expf(candidate.logit - maxLogit)
+            massByPrimary[primary, default: 0] += expf(candidate.logit - maxLogit)
+            if let current = bestPieceByPrimary[primary] {
+                if candidate.logit > current.logit {
+                    bestPieceByPrimary[primary] = (candidate.piece, candidate.logit)
+                }
+            } else {
+                bestPieceByPrimary[primary] = (candidate.piece, candidate.logit)
+            }
+        }
+        guard total > 0,
+            let bestPrimary = massByPrimary.max(by: { $0.value < $1.value })?.key
+        else { return nil }
+        let piece = bestPieceByPrimary[bestPrimary]?.piece ?? bestPrimary
+        return (piece, bestPrimary, (massByPrimary[bestPrimary] ?? 0) / total)
+    }
 }

@@ -451,6 +451,7 @@ extension StreamingNemotronMultilingualAsrManager {
                         throw ASRError.processingFailed("B3+B1 fused decoder_joint_noencproj failed")
                     }
                     predToken = findMaxIndex(fl)
+                    recordSoftLanguage(fromLogits: fl, tokenizer: tokenizer)
                     hOut = fh
                     cOut = fc
                 } else if let dja = decoderJointArgmax {
@@ -498,6 +499,7 @@ extension StreamingNemotronMultilingualAsrManager {
                         throw ASRError.processingFailed("Fused decoder_joint failed")
                     }
                     predToken = findMaxIndex(fl)
+                    recordSoftLanguage(fromLogits: fl, tokenizer: tokenizer)
                     hOut = fh
                     cOut = fc
                 } else if let decoder = self.decoder, let joint = self.joint {
@@ -534,6 +536,7 @@ extension StreamingNemotronMultilingualAsrManager {
                         throw ASRError.processingFailed("Joint failed")
                     }
                     predToken = findMaxIndex(jl)
+                    recordSoftLanguage(fromLogits: jl, tokenizer: tokenizer)
                     hOut = dh
                     cOut = dc
                 } else {
