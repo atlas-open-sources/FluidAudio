@@ -23,6 +23,37 @@ final class NemotronMultilingualTests: XCTestCase {
         XCTAssertEqual(config.chunkSamples, 112 * 160)
     }
 
+    // MARK: - Detected language (first vs current)
+
+    /// `detectedLanguage()` keeps the FIRST tag (unchanged behavior); the new
+    /// `currentDetectedLanguage()` follows the LATEST. Model-free — exercises the
+    /// tag-recording logic directly, no weights needed.
+    func testCurrentDetectedLanguageFollowsLatestWhileFirstStaysStable() async {
+        let manager = StreamingNemotronMultilingualAsrManager()
+
+        let firstBefore = await manager.detectedLanguage()
+        let currentBefore = await manager.currentDetectedLanguage()
+        XCTAssertNil(firstBefore)
+        XCTAssertNil(currentBefore)
+
+        // First tag anchors both.
+        await manager.recordDetectedLanguage("en-US")
+        // A later, different tag (a speaker switches language mid-stream).
+        await manager.recordDetectedLanguage("es-419")
+
+        let first = await manager.detectedLanguage()
+        let current = await manager.currentDetectedLanguage()
+        XCTAssertEqual(first, "en-US", "detectedLanguage() must remain the FIRST tag (no behavior change)")
+        XCTAssertEqual(current, "es-419", "currentDetectedLanguage() must follow the LATEST tag")
+
+        // Re-observing a tag keeps both stable (idempotent).
+        await manager.recordDetectedLanguage("es-419")
+        let firstAgain = await manager.detectedLanguage()
+        let currentAgain = await manager.currentDetectedLanguage()
+        XCTAssertEqual(firstAgain, "en-US")
+        XCTAssertEqual(currentAgain, "es-419")
+    }
+
     func testConfigLoadFromMetadata() throws {
         // Stand-in metadata.json matching the multilingual build format.
         let json: [String: Any] = [
