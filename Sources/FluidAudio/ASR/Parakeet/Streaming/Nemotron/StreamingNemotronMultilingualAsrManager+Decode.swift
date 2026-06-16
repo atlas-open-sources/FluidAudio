@@ -251,6 +251,10 @@ extension StreamingNemotronMultilingualAsrManager {
                     let lang = NemotronMultilingualTokenizer.stripAngleBrackets(piece)
                     recordDetectedLanguage(lang)
                 }
+                // Early soft language from this emitted frame's batched logits —
+                // mirrors the legacy loop, so the speculative path fires on time too.
+                recordSoftLanguage(
+                    fromBatchedLogits: logits, frame: firstNonBlankAt, tokenizer: tokenizer)
 
                 // MULTI-EMISSION DRAIN: standard RNN-T allows up to 10
                 // emissions per encoder frame. After the speculative scan
