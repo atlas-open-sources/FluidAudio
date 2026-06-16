@@ -90,6 +90,30 @@ final class NemotronMultilingualTests: XCTestCase {
         XCTAssertNil(StreamingNemotronMultilingualAsrManager.softLanguagePick(from: []))
     }
 
+    /// An expected-languages allowlist drops anomalies BEFORE the softmax: a
+    /// spuriously high "tr-TR" is ignored when only en/es are expected, and the
+    /// real (lower-scoring) "es-ES" wins with full confidence — not merely
+    /// smoothed by debounce.
+    func testSoftLanguagePickAllowlistDropsAnomalies() {
+        let candidates: [(piece: String, logit: Float)] = [
+            ("tr-TR", 9.0), ("es-ES", 2.0), ("en-US", -1.0),
+        ]
+        let unfiltered = StreamingNemotronMultilingualAsrManager.softLanguagePick(from: candidates)
+        XCTAssertEqual(unfiltered?.primary, "tr", "without an allowlist the anomaly wins")
+
+        let filtered = StreamingNemotronMultilingualAsrManager.softLanguagePick(
+            from: candidates, allowed: ["en", "es"])
+        XCTAssertEqual(filtered?.primary, "es", "allowlist drops tr-TR; es wins")
+        XCTAssertGreaterThan(filtered?.confidence ?? 0, 0.9, "no anomaly left to dilute confidence")
+    }
+
+    /// An empty allowlist behaves like no allowlist (accept all).
+    func testSoftLanguagePickEmptyAllowlistAcceptsAll() {
+        let pick = StreamingNemotronMultilingualAsrManager.softLanguagePick(
+            from: [("ja-JP", 5.0), ("en-US", 0.0)], allowed: [])
+        XCTAssertEqual(pick?.primary, "ja")
+    }
+
     func testConfigLoadFromMetadata() throws {
         // Stand-in metadata.json matching the multilingual build format.
         let json: [String: Any] = [

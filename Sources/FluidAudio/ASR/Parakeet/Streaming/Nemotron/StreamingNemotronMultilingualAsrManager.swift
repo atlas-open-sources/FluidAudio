@@ -1080,6 +1080,14 @@ public actor StreamingNemotronMultilingualAsrManager {
     /// Internal setter used by the pipeline when it encounters a lang-tag
     /// token in the decoder output.
     internal func recordDetectedLanguage(_ language: String) {
+        // An expected-languages allowlist (if set) objectively rejects a tag
+        // outside it — a momentary misdetection (e.g. a one-frame "tr-TR" in an
+        // en/es conversation) is dropped here, not merely smoothed by debounce.
+        if let allowed = expectedPrimaryLanguages,
+            !allowed.contains(Self.primarySubtag(language))
+        {
+            return
+        }
         if firstDetectedLanguage == nil {
             firstDetectedLanguage = language
         }
@@ -1090,6 +1098,24 @@ public actor StreamingNemotronMultilingualAsrManager {
     }
 
     private var currentDetectedLanguageValue: String?
+
+    /// Optional allowlist of expected PRIMARY language subtags (e.g. `["en","es"]`)
+    /// for the session. When set, any detected language outside it is ignored by
+    /// BOTH the discrete (`recordDetectedLanguage`) and soft (`recordSoftLanguage`)
+    /// paths — an objective anomaly filter that complements the debounce. `nil`
+    /// (the default) accepts every language. Survives per-turn `reset()`.
+    private var expectedPrimaryLanguages: Set<String>?
+
+    /// Set (or clear, with `nil`/empty) the expected-language allowlist. Values
+    /// are normalized to primary subtags, so `"en-US"`, `"en"` and `"eng"` all
+    /// constrain to English.
+    public func setExpectedLanguages(_ languages: Set<String>?) {
+        guard let languages, !languages.isEmpty else {
+            expectedPrimaryLanguages = nil
+            return
+        }
+        expectedPrimaryLanguages = Set(languages.map(Self.primarySubtag))
+    }
 
     /// The MOST RECENT language-tag piece (e.g. `"es-419"`) emitted by the decoder
     /// this session, vs `detectedLanguage()` which is the FIRST. Because the model
@@ -1157,7 +1183,7 @@ public actor StreamingNemotronMultilingualAsrManager {
         for (id, piece) in map where id < count {
             candidates.append((piece, ptr[id]))
         }
-        guard let pick = Self.softLanguagePick(from: candidates),
+        guard let pick = Self.softLanguagePick(from: candidates, allowed: expectedPrimaryLanguages),
             pick.confidence >= Self.softLanguageConfidenceThreshold
         else { return }
 
@@ -1177,14 +1203,25 @@ public actor StreamingNemotronMultilingualAsrManager {
     /// split the vote), the best-scoring piece within it, and that primary's mass
     /// fraction as confidence. Returns nil for an empty set. Separated from the
     /// CoreML buffer read so the gating math is unit-testable without a model.
+    ///
+    /// `allowed` (primary subtags) restricts the vote to expected languages —
+    /// anomalies outside it are dropped BEFORE the softmax, so they neither win
+    /// nor dilute the confidence of the real answer. `nil`/empty = accept all.
     static func softLanguagePick(
-        from candidates: [(piece: String, logit: Float)]
+        from candidates: [(piece: String, logit: Float)],
+        allowed: Set<String>? = nil
     ) -> (piece: String, primary: String, confidence: Float)? {
-        guard let maxLogit = candidates.map(\.logit).max() else { return nil }
+        let pool: [(piece: String, logit: Float)]
+        if let allowed, !allowed.isEmpty {
+            pool = candidates.filter { allowed.contains(primarySubtag($0.piece)) }
+        } else {
+            pool = candidates
+        }
+        guard let maxLogit = pool.map(\.logit).max() else { return nil }
         var massByPrimary: [String: Float] = [:]
         var bestPieceByPrimary: [String: (piece: String, logit: Float)] = [:]
         var total: Float = 0
-        for candidate in candidates {
+        for candidate in pool {
             let primary = primarySubtag(candidate.piece)
             total += expf(candidate.logit - maxLogit)
             massByPrimary[primary, default: 0] += expf(candidate.logit - maxLogit)
