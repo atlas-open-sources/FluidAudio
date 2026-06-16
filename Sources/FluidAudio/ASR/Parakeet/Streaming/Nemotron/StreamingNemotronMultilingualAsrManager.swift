@@ -826,6 +826,7 @@ public actor StreamingNemotronMultilingualAsrManager {
         audioBufferOffset = 0
         firstDetectedLanguage = nil
         vocabularyBias?.resetMatchState()
+        currentDetectedLanguageValue = nil
         do {
             try resetStates()
         } catch {
@@ -1135,5 +1136,17 @@ public actor StreamingNemotronMultilingualAsrManager {
         if firstDetectedLanguage == nil {
             firstDetectedLanguage = language
         }
+        // Track the MOST RECENT tag too (not just the first). The multilingual
+        // model re-emits a language tag whenever it detects a change mid-stream,
+        // so this surfaces live language flips — see `currentDetectedLanguage()`.
+        currentDetectedLanguageValue = language
     }
+
+    private var currentDetectedLanguageValue: String?
+
+    /// The MOST RECENT language-tag piece (e.g. `"es-419"`) emitted by the decoder
+    /// this session, vs `detectedLanguage()` which is the FIRST. Because the model
+    /// re-detects language mid-stream, comparing this to the turn's opening
+    /// language is a precise, model-native signal for a speaker language switch.
+    public func currentDetectedLanguage() -> String? { currentDetectedLanguageValue }
 }
