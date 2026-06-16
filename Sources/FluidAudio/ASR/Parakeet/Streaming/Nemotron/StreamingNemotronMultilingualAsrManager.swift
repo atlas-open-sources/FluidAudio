@@ -1183,6 +1183,45 @@ public actor StreamingNemotronMultilingualAsrManager {
         for (id, piece) in map where id < count {
             candidates.append((piece, ptr[id]))
         }
+        applySoftLanguage(candidates: candidates)
+    }
+
+    /// Same soft reading, but for one frame of a batched `[1, K, 1, V]` logits
+    /// array (the smart-speculative path's layout) — handles fp16/fp32 and
+    /// arbitrary strides. `frame` is the index along the K axis. Without this the
+    /// speculative path (used by model exports that ship
+    /// `joint_noencproj_batched`) would never surface the early soft language.
+    internal func recordSoftLanguage(
+        fromBatchedLogits logits: MLMultiArray, frame: Int,
+        tokenizer: NemotronMultilingualTokenizer
+    ) {
+        let map = langTagIdToLanguage(tokenizer)
+        guard !map.isEmpty else { return }
+        let vocab = logits.shape[3].intValue
+        let stride0 = logits.strides[0].intValue
+        let stride1 = logits.strides[1].intValue
+        let stride2 = logits.strides[2].intValue
+        let stride3 = logits.strides[3].intValue
+        let base = 0 * stride0 + frame * stride1 + 0 * stride2
+        let isF16 = (logits.dataType == .float16)
+        let f16 =
+            isF16 ? logits.dataPointer.bindMemory(to: UInt16.self, capacity: logits.count) : nil
+        let f32 =
+            isF16 ? nil : logits.dataPointer.bindMemory(to: Float.self, capacity: logits.count)
+
+        var candidates: [(piece: String, logit: Float)] = []
+        candidates.reserveCapacity(map.count)
+        for (id, piece) in map where id < vocab {
+            let value =
+                isF16 ? nemotronHalfBitsToFloat(f16![base + id * stride3]) : f32![base + id * stride3]
+            candidates.append((piece, value))
+        }
+        applySoftLanguage(candidates: candidates)
+    }
+
+    /// Shared tail of both soft readers: pick the dominant (allowlisted) language,
+    /// gate on confidence, debounce, and record.
+    private func applySoftLanguage(candidates: [(piece: String, logit: Float)]) {
         guard let pick = Self.softLanguagePick(from: candidates, allowed: expectedPrimaryLanguages),
             pick.confidence >= Self.softLanguageConfidenceThreshold
         else { return }
