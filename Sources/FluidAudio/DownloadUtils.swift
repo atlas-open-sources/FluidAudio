@@ -139,10 +139,23 @@ public class DownloadUtils {
         public let fractionCompleted: Double
         /// Current phase of the operation.
         public let phase: DownloadPhase
+        /// Bytes downloaded so far across all files, when known (nil during
+        /// listing/compiling where there is no byte transfer). Lets a UI show a
+        /// true "X / Y MB" readout instead of only a fraction.
+        public let completedBytes: Int64?
+        /// Total bytes to download across all files, when known.
+        public let totalBytes: Int64?
 
-        public init(fractionCompleted: Double, phase: DownloadPhase) {
+        public init(
+            fractionCompleted: Double,
+            phase: DownloadPhase,
+            completedBytes: Int64? = nil,
+            totalBytes: Int64? = nil
+        ) {
             self.fractionCompleted = fractionCompleted
             self.phase = phase
+            self.completedBytes = completedBytes
+            self.totalBytes = totalBytes
         }
     }
 
@@ -566,12 +579,15 @@ public class DownloadUtils {
                 onProgress = { bytesWritten, _ in
                     guard totalBytesSnapshot > 0 else { return }
                     let current = baseBytes + bytesWritten
-                    // Download phase occupies 0.0–0.5 of the overall range.
+                    // Download phase occupies 0.0–0.5 of the overall range (compile
+                    // is the other half); the byte readout is the real, unscaled total.
                     let fraction = 0.5 * Double(current) / Double(totalBytesSnapshot)
                     handler(
                         DownloadProgress(
                             fractionCompleted: min(fraction, 0.5),
-                            phase: .downloading(completedFiles: fileIndex, totalFiles: fileCount)
+                            phase: .downloading(completedFiles: fileIndex, totalFiles: fileCount),
+                            completedBytes: current,
+                            totalBytes: totalBytesSnapshot
                         ))
                 }
             } else {
@@ -601,7 +617,9 @@ public class DownloadUtils {
                     fractionCompleted: totalBytes > 0
                         ? 0.5 * Double(completedBytes) / Double(totalBytes)
                         : 0.5 * Double(index + 1) / Double(filesToDownload.count),
-                    phase: .downloading(completedFiles: index + 1, totalFiles: filesToDownload.count)
+                    phase: .downloading(completedFiles: index + 1, totalFiles: filesToDownload.count),
+                    completedBytes: totalBytes > 0 ? completedBytes : nil,
+                    totalBytes: totalBytes > 0 ? totalBytes : nil
                 ))
         }
 
@@ -858,21 +876,37 @@ public class DownloadUtils {
 
         try await listFiles(at: subdirectory)
         let totalFiles = filesToDownload.count
+        // Byte-weighted totals so the bar AND a "X / Y MB" readout reflect the real
+        // data transferred, not just file count (a few big files otherwise jump in
+        // coarse steps). Unknown sizes (-1) contribute 0; if no size is known we
+        // fall back to file-count fractions.
+        let totalBytes: Int64 = filesToDownload.reduce(0) { $0 + Int64(max(0, $1.size)) }
+        let haveBytes = totalBytes > 0
         logger.info("Found \(totalFiles) files in \(subdirectory)")
-        progressHandler?(
-            DownloadProgress(
-                fractionCompleted: totalFiles == 0 ? 1.0 : 0.0,
-                phase: .downloading(completedFiles: 0, totalFiles: totalFiles)))
+        var completedBytes: Int64 = 0
+
+        // Snapshot of fully-completed files, byte-weighted when sizes are known.
+        func reportCompleted(_ completedFiles: Int) {
+            let fraction = haveBytes
+                ? min(1.0, Double(completedBytes) / Double(totalBytes))
+                : (totalFiles == 0 ? 1.0 : Double(completedFiles) / Double(totalFiles))
+            progressHandler?(
+                DownloadProgress(
+                    fractionCompleted: fraction,
+                    phase: .downloading(completedFiles: completedFiles, totalFiles: totalFiles),
+                    completedBytes: haveBytes ? completedBytes : nil,
+                    totalBytes: haveBytes ? totalBytes : nil))
+        }
+
+        reportCompleted(0)
 
         for (index, file) in filesToDownload.enumerated() {
             let destPath = repoDirectory.appendingPathComponent(file.path)
+            let fileBytes = Int64(max(0, file.size))
 
             if FileManager.default.fileExists(atPath: destPath.path) {
-                progressHandler?(
-                    DownloadProgress(
-                        fractionCompleted: Double(index + 1) / Double(totalFiles),
-                        phase: .downloading(
-                            completedFiles: index + 1, totalFiles: totalFiles)))
+                completedBytes += fileBytes
+                reportCompleted(index + 1)
                 continue
             }
 
@@ -883,11 +917,7 @@ public class DownloadUtils {
 
             if file.size == 0 {
                 FileManager.default.createFile(atPath: destPath.path, contents: Data())
-                progressHandler?(
-                    DownloadProgress(
-                        fractionCompleted: Double(index + 1) / Double(totalFiles),
-                        phase: .downloading(
-                            completedFiles: index + 1, totalFiles: totalFiles)))
+                reportCompleted(index + 1)
                 if (index + 1) % 5 == 0 || index == totalFiles - 1 {
                     logger.info("Downloaded \(index + 1)/\(totalFiles) \(subdirectory) files")
                 }
@@ -899,34 +929,39 @@ public class DownloadUtils {
             let fileURL = try ModelRegistry.resolveModel(repo.remotePath, encodedPath)
             let request = authorizedRequest(url: fileURL)
 
-            let (tempURL, response) = try await sharedSession.download(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw HuggingFaceDownloadError.invalidResponse
+            // Stream with per-byte progress (smooth bar WITHIN a file) + bounded
+            // retry so a transient CDN/TLS blip on one file no longer aborts the
+            // entire subdirectory download (it previously had no retry at all).
+            let onProgress: (@Sendable (Int64, Int64) -> Void)?
+            if let handler = progressHandler, haveBytes {
+                let baseBytes = completedBytes
+                let totalBytesSnapshot = totalBytes
+                let fileIndex = index
+                let totalFilesSnapshot = totalFiles
+                let fileBytesSnapshot = fileBytes
+                onProgress = { bytesWritten, _ in
+                    let inFlight = min(max(0, bytesWritten), fileBytesSnapshot)
+                    let current = baseBytes + inFlight
+                    handler(
+                        DownloadProgress(
+                            fractionCompleted: min(1.0, Double(current) / Double(totalBytesSnapshot)),
+                            phase: .downloading(completedFiles: fileIndex, totalFiles: totalFilesSnapshot),
+                            completedBytes: current,
+                            totalBytes: totalBytesSnapshot))
+                }
+            } else {
+                onProgress = nil
             }
 
-            if httpResponse.statusCode == 429 || httpResponse.statusCode == 503 {
-                throw HuggingFaceDownloadError.rateLimited(
-                    statusCode: httpResponse.statusCode,
-                    message: "Rate limited while downloading \(file.path)")
-            }
-
-            guard (200..<300).contains(httpResponse.statusCode) else {
-                throw HuggingFaceDownloadError.downloadFailed(
-                    path: file.path,
-                    underlying: NSError(domain: "HTTP", code: httpResponse.statusCode)
-                )
-            }
+            let tempURL = try await downloadFileWithRetry(
+                request: request, path: file.path, onProgress: onProgress)
 
             if FileManager.default.fileExists(atPath: destPath.path) {
                 try? FileManager.default.removeItem(at: destPath)
             }
             try FileManager.default.moveItem(at: tempURL, to: destPath)
-
-            progressHandler?(
-                DownloadProgress(
-                    fractionCompleted: Double(index + 1) / Double(totalFiles),
-                    phase: .downloading(
-                        completedFiles: index + 1, totalFiles: totalFiles)))
+            completedBytes += fileBytes
+            reportCompleted(index + 1)
 
             if (index + 1) % 5 == 0 || index == totalFiles - 1 {
                 logger.info("Downloaded \(index + 1)/\(totalFiles) \(subdirectory) files")
