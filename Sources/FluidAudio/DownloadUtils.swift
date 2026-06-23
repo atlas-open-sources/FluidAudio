@@ -690,20 +690,25 @@ public class DownloadUtils {
         request: URLRequest,
         onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws -> (URL, HTTPURLResponse) {
+        // Use an EXPLICIT delegate-driven `downloadTask` (not the async
+        // `download(for:)` / `download(for:delegate:)` sugar). Empirically, on iOS
+        // neither async variant delivers incremental `didWriteData` — byte progress
+        // only advanced once per completed file. A plain delegate download task
+        // reliably delivers within-file `didWriteData`, so the bar/MB stream live.
+        // The delegate moves the finished temp file (it's deleted when the delegate
+        // method returns) and bridges completion back through the continuation.
         let delegate = DownloadProgressDelegate(onProgress: onProgress)
-        // IMPORTANT: pass the delegate to the PER-TASK `download(for:delegate:)` API.
-        // The async `download(for:)` on a session whose delegate is set at the
-        // *session* level does NOT deliver `didWriteData` — so byte progress would
-        // only advance once per completed file. The per-task delegate variant
-        // delivers incremental `didWriteData` callbacks for true within-file
-        // streaming progress.
-        let (tempURL, response) = try await sharedSession.download(for: request, delegate: delegate)
+        let session = URLSession(
+            configuration: sharedSession.configuration,
+            delegate: delegate,
+            delegateQueue: nil
+        )
+        defer { session.finishTasksAndInvalidate() }
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw HuggingFaceDownloadError.invalidResponse
+        return try await withCheckedThrowingContinuation { continuation in
+            delegate.setContinuation(continuation)
+            session.downloadTask(with: request).resume()
         }
-
-        return (tempURL, httpResponse)
     }
 
     // MARK: - Per-file download with bounded retry
@@ -1019,12 +1024,26 @@ public class DownloadUtils {
 
 // MARK: - URLSession download delegate for byte-level progress
 
-/// Lightweight delegate that forwards `didWriteData` callbacks to a closure.
-private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, Sendable {
+/// Delegate that forwards incremental `didWriteData` progress (throttled) and
+/// bridges a delegate-driven download task back to async/await via a continuation.
+/// Callbacks are delivered serially on the session's delegate queue, so the mutable
+/// state needs no extra locking (hence `@unchecked Sendable`).
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let onProgress: @Sendable (Int64, Int64) -> Void
+    private var continuation: CheckedContinuation<(URL, HTTPURLResponse), Error>?
+    private var movedTempURL: URL?
+    /// Throttle progress to ~every 256 KB so a fast transfer doesn't flood the
+    /// caller (tens of thousands of callbacks → a backed-up main thread that makes
+    /// the readout lag far behind reality).
+    private var lastForwardedBytes: Int64 = -1
+    private static let progressByteStride: Int64 = 256 * 1024
 
     init(onProgress: @escaping @Sendable (Int64, Int64) -> Void) {
         self.onProgress = onProgress
+    }
+
+    func setContinuation(_ continuation: CheckedContinuation<(URL, HTTPURLResponse), Error>) {
+        self.continuation = continuation
     }
 
     func urlSession(
@@ -1034,7 +1053,12 @@ private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelega
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
-        onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+        if lastForwardedBytes < 0
+            || totalBytesWritten - lastForwardedBytes >= Self.progressByteStride
+            || totalBytesWritten == totalBytesExpectedToWrite {
+            lastForwardedBytes = totalBytesWritten
+            onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+        }
     }
 
     func urlSession(
@@ -1042,6 +1066,35 @@ private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelega
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
-        // Required by protocol — the async download(for:) API handles the file.
+        // The temp file at `location` is removed as soon as this method returns —
+        // move it to a stable temp URL now so the caller can use it.
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        do {
+            try FileManager.default.moveItem(at: location, to: dest)
+            movedTempURL = dest
+        } catch {
+            movedTempURL = nil
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        defer { continuation = nil }
+        if let error {
+            continuation?.resume(throwing: error)
+            return
+        }
+        guard let httpResponse = task.response as? HTTPURLResponse else {
+            continuation?.resume(throwing: DownloadUtils.HuggingFaceDownloadError.invalidResponse)
+            return
+        }
+        guard let url = movedTempURL else {
+            continuation?.resume(throwing: DownloadUtils.HuggingFaceDownloadError.invalidResponse)
+            return
+        }
+        continuation?.resume(returning: (url, httpResponse))
     }
 }
