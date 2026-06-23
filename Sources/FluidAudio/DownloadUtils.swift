@@ -691,15 +691,13 @@ public class DownloadUtils {
         onProgress: @escaping @Sendable (Int64, Int64) -> Void
     ) async throws -> (URL, HTTPURLResponse) {
         let delegate = DownloadProgressDelegate(onProgress: onProgress)
-        // Dedicated session with delegate — one per download to avoid cross-talk.
-        let session = URLSession(
-            configuration: sharedSession.configuration,
-            delegate: delegate,
-            delegateQueue: nil
-        )
-        defer { session.finishTasksAndInvalidate() }
-
-        let (tempURL, response) = try await session.download(for: request)
+        // IMPORTANT: pass the delegate to the PER-TASK `download(for:delegate:)` API.
+        // The async `download(for:)` on a session whose delegate is set at the
+        // *session* level does NOT deliver `didWriteData` — so byte progress would
+        // only advance once per completed file. The per-task delegate variant
+        // delivers incremental `didWriteData` callbacks for true within-file
+        // streaming progress.
+        let (tempURL, response) = try await sharedSession.download(for: request, delegate: delegate)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw HuggingFaceDownloadError.invalidResponse
