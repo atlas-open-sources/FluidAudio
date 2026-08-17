@@ -73,10 +73,30 @@ public struct DownloadProgress: Sendable {
     public let fractionCompleted: Double
     /// Current phase of the operation.
     public let phase: DownloadPhase
+    /// Bytes transferred so far in the download phase, when known.
+    ///
+    /// `ProgressReporter` already computes the byte-weighted fraction from these
+    /// two values and then discards them. Surfacing them lets a UI show an
+    /// honest "412 / 665 MB" readout rather than only a bar: on a 665 MB model
+    /// over a slow link, a percentage alone is indistinguishable from a stall,
+    /// and users kill downloads they believe have hung.
+    ///
+    /// nil outside the download phase, and whenever total size is unknown —
+    /// a fabricated zero would read as a stalled transfer.
+    public let completedBytes: Int64?
+    /// Total bytes the download phase expects, when known.
+    public let totalBytes: Int64?
 
-    public init(fractionCompleted: Double, phase: DownloadPhase) {
+    public init(
+        fractionCompleted: Double,
+        phase: DownloadPhase,
+        completedBytes: Int64? = nil,
+        totalBytes: Int64? = nil
+    ) {
         self.fractionCompleted = fractionCompleted
         self.phase = phase
+        self.completedBytes = completedBytes
+        self.totalBytes = totalBytes
     }
 }
 
