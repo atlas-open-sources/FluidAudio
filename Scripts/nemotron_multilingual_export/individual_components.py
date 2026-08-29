@@ -203,6 +203,47 @@ class JointWrapper(torch.nn.Module):
         return out
 
 
+class DecoderJointWrapper(torch.nn.Module):
+    """Fused decoder + joint for the RNNT inner loop (the shipped "B1" path).
+
+    One CoreML call per emitted token instead of two — the per-call dispatch
+    overhead dominates the tiny decoder/joint compute, so fusing them is most
+    of the shipped bundles' same-tier RTFx edge. Interface matches the shipped
+    decoder_joint.mlmodelc exactly: token/token_length/h_in/c_in/encoder in,
+    logits/h_out/c_out out.
+    """
+
+    def __init__(self, decoder_module: torch.nn.Module, joint_module: torch.nn.Module) -> None:
+        super().__init__()
+        self.decoder_module = decoder_module
+        self.joint_module = joint_module
+
+    def forward(
+        self,
+        token: torch.Tensor,
+        token_length: torch.Tensor,
+        h_in: torch.Tensor,
+        c_in: torch.Tensor,
+        encoder_step: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        decoder_output, _, new_state = self.decoder_module(
+            targets=token.to(dtype=torch.long),
+            target_length=token_length.to(dtype=torch.long),
+            states=[h_in, c_in],
+        )
+        dec_step = decoder_output[:, :, :1]  # single decode step [B, D, 1]
+
+        enc_t = encoder_step.transpose(1, 2)  # [B, 1, D]
+        dec_t = dec_step.transpose(1, 2)  # [B, 1, D]
+        enc_proj = self.joint_module.enc(enc_t)
+        dec_proj = self.joint_module.pred(dec_t)
+        x = enc_proj.unsqueeze(2) + dec_proj.unsqueeze(1)  # [B, 1, 1, joint_dim]
+        x = self.joint_module.joint_net[0](x)
+        x = self.joint_module.joint_net[1](x)
+        logits = self.joint_module.joint_net[2](x)
+        return logits, new_state[0], new_state[1]
+
+
 class MelEncoderWrapper(torch.nn.Module):
     """Fused wrapper: waveform -> mel -> encoder (no cache, initial chunk)."""
 
