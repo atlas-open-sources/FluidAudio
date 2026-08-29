@@ -61,6 +61,15 @@ def convert(
     encoder_cu: str = typer.Option("CPU_AND_NE", help="Encoder compute units"),
     precision: str = typer.Option("FLOAT32", help="FLOAT32 or FLOAT16"),
     lookahead: int = typer.Option(6, help="Encoder lookahead tokens: 0=80ms, 3=320ms, 6=560ms, 13=1120ms"),
+    prune_tokenizer: Optional[Path] = typer.Option(
+        None,
+        help=(
+            "Path to a pruned tokenizer.json (id->piece map including '<blank>' at its "
+            "blank idx, e.g. a shipped latin bundle's). Slices the decoder embedding and "
+            "joint output rows to exactly that vocabulary, producing a latin-style ship "
+            "whose token ids match the reference tokenizer."
+        ),
+    ),
 ) -> None:
     """Export Nemotron Streaming to CoreML."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -127,6 +136,51 @@ def convert(
         f"prompt: num_prompts={num_prompts} dict_entries={len(prompt_dictionary)} "
         f"default_prompt_id={default_prompt_id}"
     )
+
+    # Optional vocab pruning (latin-style ship): slice the decoder embedding and
+    # joint output rows down to the reference tokenizer's pieces, so the bundle's
+    # token ids match that tokenizer exactly. The encoder is untouched.
+    vocab_pruned = prune_tokenizer is not None
+    if vocab_pruned:
+        ref = json.loads(Path(prune_tokenizer).read_text())
+        n_out = len(ref)
+        full_vocab = int(model.tokenizer.vocab_size)
+        piece_to_full = {model.tokenizer.ids_to_tokens([i])[0]: i for i in range(full_vocab)}
+        keep = []
+        missing = []
+        for nid in range(n_out):
+            piece = ref[str(nid)]
+            if piece == "<blank>":
+                keep.append(int(model.decoder.blank_idx))
+            elif piece in piece_to_full:
+                keep.append(piece_to_full[piece])
+            else:
+                missing.append(piece)
+        if missing:
+            raise typer.BadParameter(
+                f"{len(missing)} pieces of the reference tokenizer are absent from this "
+                f"checkpoint (first: {missing[:3]}) — tokenizers are incompatible"
+            )
+        idx = torch.tensor(keep, dtype=torch.long)
+        embed = model.decoder.prediction["embed"]
+        embed.weight.data = embed.weight.data[idx].clone()
+        embed.num_embeddings = n_out
+        # NeMo builds the embedding with padding_idx = blank; repoint it at the
+        # pruned blank or nn.Embedding asserts it is within num_embeddings.
+        if getattr(embed, "padding_idx", None) is not None:
+            embed.padding_idx = n_out - 1
+        out_linear = model.joint.joint_net[2]
+        out_linear.weight.data = out_linear.weight.data[idx].clone()
+        out_linear.bias.data = out_linear.bias.data[idx].clone()
+        out_linear.out_features = n_out
+        blank_idx_out = n_out - 1
+        vocab_size_out = n_out - 1
+        pieces_out = {i: ref[str(i)] for i in range(vocab_size_out)}
+        typer.echo(f"vocab pruned: {full_vocab + 1} -> {n_out} rows (blank at {blank_idx_out})")
+    else:
+        blank_idx_out = int(model.decoder.blank_idx)
+        vocab_size_out = int(model.tokenizer.vocab_size)
+        pieces_out = None  # built later from the model tokenizer
 
     # Create wrappers
     preprocessor = PreprocessorWrapper(model.preprocessor.eval())
@@ -204,7 +258,7 @@ def convert(
     decoder_hidden = int(model.decoder.pred_hidden)
     decoder_layers = int(model.decoder.pred_rnn_layers)
 
-    targets = torch.tensor([[model.decoder.blank_idx]], dtype=torch.int32)
+    targets = torch.tensor([[blank_idx_out]], dtype=torch.int32)
     target_len = torch.tensor([1], dtype=torch.int32)
     h = torch.zeros(decoder_layers, 1, decoder_hidden)
     c = torch.zeros(decoder_layers, 1, decoder_hidden)
@@ -253,14 +307,16 @@ def convert(
     mlmodel.save(str(output_dir / "joint.mlpackage"))
 
     # === Metadata ===
-    vocab_size = int(model.tokenizer.vocab_size)
+    vocab_size = vocab_size_out
 
     # Language-tag tokens (<en-US> etc.) that the model emits as a leading
     # token; FluidAudio filters them from transcripts and surfaces the first
     # as the detected language.
     import re as _re
 
-    pieces = {i: model.tokenizer.ids_to_tokens([i])[0] for i in range(vocab_size)}
+    if pieces_out is None:
+        pieces_out = {i: model.tokenizer.ids_to_tokens([i])[0] for i in range(vocab_size)}
+    pieces = pieces_out
     lang_tag_token_ids = sorted(
         i
         for i, piece in pieces.items()
@@ -277,7 +333,7 @@ def convert(
         "pre_encode_cache": PRE_ENCODE_CACHE,
         "total_mel_frames": TOTAL_MEL_FRAMES,
         "vocab_size": vocab_size,
-        "blank_idx": int(model.decoder.blank_idx),
+        "blank_idx": blank_idx_out,
         "cache_channel_shape": list(cache_channel_b.shape),
         "cache_time_shape": list(cache_time_b.shape),
         "decoder_hidden": decoder_hidden,
@@ -291,12 +347,15 @@ def convert(
         "lang_tag_token_ids": lang_tag_token_ids,
         "model_class": type(model).__module__ + "." + type(model).__name__,
     }
+    if vocab_pruned:
+        metadata["vocab_pruned"] = True
+        metadata["vocab_pruned_original_size"] = int(model.tokenizer.vocab_size)
     (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
     # Tokenizer — the shipped bundles include an explicit "<blank>" entry at
     # blank_idx (== vocab_size); FluidAudio's corruption check relies on it.
     tokenizer = {str(i): pieces[i] for i in range(vocab_size)}
-    tokenizer[str(int(model.decoder.blank_idx))] = "<blank>"
+    tokenizer[str(blank_idx_out)] = "<blank>"
     (output_dir / "tokenizer.json").write_text(json.dumps(tokenizer, indent=2))
 
     typer.echo(f"Done! Exported to {output_dir}")
