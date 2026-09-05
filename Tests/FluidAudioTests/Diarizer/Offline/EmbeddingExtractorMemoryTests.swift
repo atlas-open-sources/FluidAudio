@@ -44,6 +44,7 @@ final class EmbeddingExtractorMemoryTests: XCTestCase {
 
     func testBufferPoolingForMasks() throws {
         let optimizer = ANEMemoryOptimizer()
+        let scratchBuffers = optimizer.makeScratchBuffers()
 
         // Test that mask buffers of different sizes are pooled correctly
         let sizes = [100, 500, 1000, 2000]
@@ -53,14 +54,14 @@ final class EmbeddingExtractorMemoryTests: XCTestCase {
             let shape = [3, size] as [NSNumber]
 
             // Get buffer from pool
-            let buffer1 = try optimizer.getPooledBuffer(
+            let buffer1 = try scratchBuffers.buffer(
                 key: key,
                 shape: shape,
                 dataType: .float32
             )
 
             // Get same buffer again - should be identical
-            let buffer2 = try optimizer.getPooledBuffer(
+            let buffer2 = try scratchBuffers.buffer(
                 key: key,
                 shape: shape,
                 dataType: .float32
@@ -74,6 +75,7 @@ final class EmbeddingExtractorMemoryTests: XCTestCase {
 
     func testMemoryStressWithMultipleMasks() throws {
         let optimizer = ANEMemoryOptimizer()
+        let scratchBuffers = optimizer.makeScratchBuffers()
 
         // Simulate processing many speakers with different mask sizes
         autoreleasepool {
@@ -82,7 +84,7 @@ final class EmbeddingExtractorMemoryTests: XCTestCase {
                     let maskSize = 100 + iteration * 10
                     let key = "stress_test_\(speakerCount)_\(maskSize)"
 
-                    _ = try? optimizer.getPooledBuffer(
+                    _ = try? scratchBuffers.buffer(
                         key: key,
                         shape: [3, maskSize] as [NSNumber],
                         dataType: .float32
@@ -92,9 +94,9 @@ final class EmbeddingExtractorMemoryTests: XCTestCase {
         }
 
         // Clear pool and verify we can still allocate
-        optimizer.clearBufferPool()
+        scratchBuffers.removeAll()
 
-        let finalBuffer = try optimizer.getPooledBuffer(
+        let finalBuffer = try scratchBuffers.buffer(
             key: "after_stress",
             shape: [3, 100] as [NSNumber],
             dataType: .float32
@@ -150,37 +152,47 @@ final class EmbeddingExtractorMemoryTests: XCTestCase {
             "Should use same buffer instance")
     }
 
-    func testConcurrentBufferAccess() {
-        // Test concurrent buffer access by running operations sequentially
-        // Swift 6 strict concurrency prevents capturing ANEMemoryOptimizer in concurrent closures
-        let optimizer = ANEMemoryOptimizer()
+    func testConcurrentBufferAccess() async throws {
+        let allocator = ANEMemoryOptimizer()
+        let workers = 10
+        let barrier = ScratchBufferTestBarrier(participants: workers)
 
-        for index in 0..<10 {
-            autoreleasepool {
-                do {
-                    // Each iteration gets its own waveform buffer
-                    let waveformBuffer = try optimizer.getPooledBuffer(
-                        key: "concurrent_waveform_\(index)",
-                        shape: [3, 240000] as [NSNumber],
-                        dataType: .float32
-                    )
+        let results = try await withThrowingTaskGroup(of: ScratchBufferObservation.self) { group in
+            for index in 0..<workers {
+                group.addTask {
+                    do {
+                        let scratch = allocator.makeScratchBuffers()
+                        let mask = try scratch.buffer(key: "mask", shape: [3, 1000], dataType: .float32)
+                        let sentinel = Float(index + 1)
+                        mask[0] = NSNumber(value: sentinel)
+                        mask[mask.count - 1] = NSNumber(value: sentinel)
+                        let provider = ZeroCopyDiarizerFeatureProvider(
+                            features: ["mask": MLFeatureValue(multiArray: mask)]
+                        )
 
-                    // Shared mask buffers (simulating speaker masks)
-                    let maskBuffer = try optimizer.getPooledBuffer(
-                        key: "concurrent_mask_\(index % 3)",
-                        shape: [3, 1000] as [NSNumber],
-                        dataType: .float32
-                    )
-
-                    // Simulate some processing
-                    waveformBuffer[0] = NSNumber(value: Float(index))
-                    maskBuffer[0] = NSNumber(value: Float(index))
-
-                    XCTAssertEqual(waveformBuffer[0].floatValue, Float(index))
-                } catch {
-                    XCTFail("Buffer access failed: \(error)")
+                        // A real feature provider retains each operation's input over suspension.
+                        try await barrier.arriveAndWait()
+                        let retained = provider.featureValue(for: "mask")!.multiArrayValue!
+                        let reused = try scratch.buffer(key: "mask", shape: [3, 1000], dataType: .float32)
+                        return ScratchBufferObservation(
+                            address: Int(bitPattern: retained.dataPointer),
+                            contents: [retained[0].floatValue, retained[retained.count - 1].floatValue],
+                            expectedValue: sentinel,
+                            reusedWithinOperation: reused === retained
+                        )
+                    } catch {
+                        await barrier.abort()
+                        throw error
+                    }
                 }
             }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+
+        XCTAssertEqual(Set(results.map(\.address)).count, workers)
+        for result in results {
+            XCTAssertEqual(result.contents, [result.expectedValue, result.expectedValue])
+            XCTAssertTrue(result.reusedWithinOperation)
         }
     }
 }

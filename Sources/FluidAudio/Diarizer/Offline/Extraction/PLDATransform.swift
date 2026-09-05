@@ -179,9 +179,8 @@ public struct PLDATransform {
 
     private func performWarmup() async throws {
         let warmupShape: [NSNumber] = [1, NSNumber(value: embeddingDimension)]
-        let warmupKey = "offline_plda_warmup_embedding_\(embeddingDimension)"
-        let warmupArray = try memoryOptimizer.getPooledBuffer(
-            key: warmupKey,
+        // One warmup per transform; never share its input across awaited calls.
+        let warmupArray = try memoryOptimizer.createAlignedArray(
             shape: warmupShape,
             dataType: .float32
         )

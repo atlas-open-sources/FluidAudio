@@ -25,7 +25,7 @@ final class RetryPolicyTests: XCTestCase {
     func testTransientFailuresConsumeAllAttemptsThenThrowLastError() async {
         let counter = Counter()
         do {
-            let _: Never = try await RetryPolicy.withRetry(
+            let _: Void = try await RetryPolicy.withRetry(
                 label: "transient", maxAttempts: 3, minBackoff: 0.01
             ) { _ in
                 _ = counter.increment()
@@ -43,7 +43,7 @@ final class RetryPolicyTests: XCTestCase {
     func testPermanentFailureFailsFastOnFirstAttempt() async {
         let counter = Counter()
         do {
-            let _: Never = try await RetryPolicy.withRetry(
+            let _: Void = try await RetryPolicy.withRetry(
                 label: "permanent", maxAttempts: 4, minBackoff: 0.01
             ) { _ in
                 _ = counter.increment()
@@ -78,7 +78,7 @@ final class RetryPolicyTests: XCTestCase {
         // the underlying error — the envelope never escapes withRetry.
         let counter = Counter()
         do {
-            let _: Never = try await RetryPolicy.withRetry(
+            let _: Void = try await RetryPolicy.withRetry(
                 label: "hinted-permanent", maxAttempts: 4, minBackoff: 0.01
             ) { _ in
                 _ = counter.increment()
@@ -99,7 +99,7 @@ final class RetryPolicyTests: XCTestCase {
     func testCancellationPropagatesWithoutRetry() async {
         let counter = Counter()
         do {
-            let _: Never = try await RetryPolicy.withRetry(
+            let _: Void = try await RetryPolicy.withRetry(
                 label: "cancelled", maxAttempts: 4, minBackoff: 0.01
             ) { _ in
                 _ = counter.increment()

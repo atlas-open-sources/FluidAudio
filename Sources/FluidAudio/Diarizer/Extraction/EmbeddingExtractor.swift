@@ -98,17 +98,10 @@ public final class EmbeddingExtractor {
 
             let output = try wespeakerModel.prediction(from: featureProvider, options: options)
 
-            // Extract embedding with zero-copy
-            if let embeddingArray = output.featureValue(for: "embedding")?.multiArrayValue {
-                let embedding = extractEmbeddingOptimized(
-                    from: embeddingArray,
-                    speakerIndex: 0
-                )
-                embeddings.append(embedding)
-            } else {
-                // Fallback to zero embedding
-                embeddings.append([Float](repeating: 0.0, count: 256))
+            guard let embeddingArray = output.featureValue(for: "embedding")?.multiArrayValue else {
+                throw DiarizerError.embeddingExtractionFailed
             }
+            embeddings.append(try DiarizerEmbeddingOutput.extract(from: embeddingArray))
         }
 
         return embeddings
@@ -198,44 +191,4 @@ public final class EmbeddingExtractor {
         }
     }
 
-    private func extractEmbeddingOptimized(
-        from multiArray: MLMultiArray,
-        speakerIndex: Int
-    ) -> [Float] {
-        let embeddingDim = 256
-
-        // Try to create a zero-copy view if possible
-        if let embeddingView = try? memoryOptimizer.createZeroCopyView(
-            from: multiArray,
-            shape: [embeddingDim as NSNumber],
-            offset: speakerIndex * embeddingDim
-        ) {
-            // Extract directly from the view
-            var embedding = [Float](repeating: 0, count: embeddingDim)
-            let ptr = embeddingView.dataPointer.assumingMemoryBound(to: Float.self)
-            _ = embedding.withUnsafeMutableBufferPointer { buffer in
-                // Use optimized memory copy
-                memcpy(buffer.baseAddress!, ptr, embeddingDim * MemoryLayout<Float>.size)
-            }
-            return embedding
-        }
-
-        // Fallback to standard extraction
-        var embedding = [Float](repeating: 0, count: embeddingDim)
-        let ptr = multiArray.dataPointer.assumingMemoryBound(to: Float.self)
-        let offset = speakerIndex * embeddingDim
-
-        embedding.withUnsafeMutableBufferPointer { buffer in
-            vDSP_mmov(
-                ptr.advanced(by: offset),
-                buffer.baseAddress!,
-                vDSP_Length(embeddingDim),
-                vDSP_Length(1),
-                vDSP_Length(1),
-                vDSP_Length(embeddingDim)
-            )
-        }
-
-        return embedding
-    }
 }

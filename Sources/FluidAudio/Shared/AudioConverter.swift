@@ -148,7 +148,7 @@ final public class AudioConverter: Sendable {
         // Copy samples into buffer
         if let channelData = inputBuffer.floatChannelData {
             samples.withUnsafeBufferPointer { src in
-                memcpy(channelData[0], src.baseAddress!, samples.count * MemoryLayout<Float>.stride)
+                channelData[0].update(from: src.baseAddress!, count: samples.count)
             }
         }
 

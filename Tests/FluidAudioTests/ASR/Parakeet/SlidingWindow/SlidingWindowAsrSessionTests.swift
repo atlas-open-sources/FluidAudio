@@ -132,11 +132,11 @@ final class SlidingWindowAsrSessionTests: XCTestCase {
         await session?.cleanup()
 
         // Weak reference for testing
-        weak var weakSession = session
+        let weakSession = { [weak session] in session }
         session = nil
 
         // Session should be deallocated
-        XCTAssertNil(weakSession)
+        XCTAssertNil(weakSession())
     }
 
     // MARK: - Integration Preparation Tests

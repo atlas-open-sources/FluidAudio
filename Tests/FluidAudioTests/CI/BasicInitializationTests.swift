@@ -56,7 +56,7 @@ final class CoreMLDiarizerTests: XCTestCase {
 
         // Test diarization fails when not initialized
         do {
-            _ = try await manager.performCompleteDiarization(testSamples, sampleRate: 16000)
+            _ = try manager.performCompleteDiarization(testSamples, sampleRate: 16000)
             XCTFail("Should have thrown notInitialized error")
         } catch DiarizerError.notInitialized {
             // Expected error
@@ -248,7 +248,7 @@ extension CoreMLDiarizerTests {
         // Load the downloaded models using the predownloaded loader function.
         // We already know that the models are there; it's enough to just check that this works to load them.
 
-        let _ = try await DiarizerModels.load(
+        let _ = try DiarizerModels.load(
             localSegmentationModel: segmentationPath,
             localEmbeddingModel: embeddingPath
         )
@@ -319,7 +319,7 @@ extension CoreMLDiarizerTests {
         // Load the downloaded models using the predownloaded loader function.
         // We already know that the models are there; it's enough to just check that this works to load them.
 
-        let _ = try await DiarizerModels.load(
+        let _ = try DiarizerModels.load(
             localSegmentationModel: segmentationPath,
             localEmbeddingModel: embeddingPath
         )
@@ -424,7 +424,7 @@ final class CoreMLBackendIntegrationTests: XCTestCase {
             // Test that we can perform basic operations
             let testSamples = Array(repeating: Float(0.5), count: 16000)
 
-            let _ = try await diarizer.performCompleteDiarization(testSamples, sampleRate: 16000)
+            let _ = try diarizer.performCompleteDiarization(testSamples, sampleRate: 16000)
 
             diarizer.cleanup()
         } catch {

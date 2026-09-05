@@ -6,6 +6,7 @@ import XCTest
 final class DiarizerMemoryTests: XCTestCase {
 
     var optimizer: ANEMemoryOptimizer!
+    var scratchBuffers: ANEScratchBuffers!
     var embeddingExtractor: EmbeddingExtractor!
     var segmentationProcessor: SegmentationProcessor!
     var config: DiarizerConfig!
@@ -13,6 +14,7 @@ final class DiarizerMemoryTests: XCTestCase {
     override func setUp() {
         super.setUp()
         optimizer = ANEMemoryOptimizer()
+        scratchBuffers = optimizer.makeScratchBuffers()
         config = DiarizerConfig()
         segmentationProcessor = SegmentationProcessor()
     }
@@ -20,7 +22,8 @@ final class DiarizerMemoryTests: XCTestCase {
     override func tearDown() {
         embeddingExtractor = nil
         segmentationProcessor = nil
-        optimizer.clearBufferPool()
+        scratchBuffers = nil
+        optimizer = nil
         super.tearDown()
     }
 
@@ -94,7 +97,7 @@ final class DiarizerMemoryTests: XCTestCase {
         for i in 0..<1000 {
             do {
                 let key = "exhaustion_test_\(i)"
-                let buffer = try optimizer.getPooledBuffer(
+                let buffer = try scratchBuffers.buffer(
                     key: key,
                     shape: [bufferSize] as [NSNumber],
                     dataType: .float32
@@ -107,11 +110,11 @@ final class DiarizerMemoryTests: XCTestCase {
             }
         }
 
-        // Clear pool should free memory
-        optimizer.clearBufferPool()
+        // Clear cached references; retained caller buffers remain alive.
+        scratchBuffers.removeAll()
 
         // Should be able to allocate again
-        let newBuffer = try optimizer.getPooledBuffer(
+        let newBuffer = try scratchBuffers.buffer(
             key: "after_clear",
             shape: [100] as [NSNumber],
             dataType: .float32
@@ -119,39 +122,43 @@ final class DiarizerMemoryTests: XCTestCase {
         XCTAssertEqual(newBuffer.count, 100)
     }
 
-    func testConcurrentBufferPoolStress() {
-        // Swift 6: ANEMemoryOptimizer is not Sendable, run stress test sequentially
+    func testConcurrentBufferPoolStress() async throws {
+        let allocator = try XCTUnwrap(optimizer)
+        let workers = 8
         let iterations = 100
-        let queues = 8
+        let barrier = ScratchBufferTestBarrier(participants: workers)
 
-        for queueIndex in 0..<queues {
-            for i in 0..<iterations {
-                autoreleasepool {
+        let verifiedIterations = try await withThrowingTaskGroup(of: Int.self) { group in
+            for worker in 0..<workers {
+                group.addTask {
                     do {
-                        // Mix of different operations
-                        if i % 3 == 0 {
-                            // Create new buffer
-                            _ = try optimizer.createAlignedArray(
-                                shape: [1000] as [NSNumber],
-                                dataType: .float32
+                        let scratch = allocator.makeScratchBuffers()
+                        for iteration in 0..<iterations {
+                            let key = "stress_\(iteration % 10)"
+                            let buffer = try scratch.buffer(key: key, shape: [128], dataType: .float32)
+                            let sentinel = Float(worker * iterations + iteration)
+                            buffer[0] = NSNumber(value: sentinel)
+                            let provider = ZeroCopyDiarizerFeatureProvider(
+                                features: ["input": MLFeatureValue(multiArray: buffer)]
                             )
-                        } else if i % 3 == 1 {
-                            // Get pooled buffer
-                            _ = try optimizer.getPooledBuffer(
-                                key: "stress_\(queueIndex)_\(i % 10)",
-                                shape: [10000] as [NSNumber],
-                                dataType: .float32
-                            )
-                        } else {
-                            // Clear pool
-                            optimizer.clearBufferPool()
+                            if iteration % 3 == 0 {
+                                scratch.removeAll()
+                            }
+                            try await barrier.arriveAndWait()
+                            guard provider.featureValue(for: "input")?.multiArrayValue?[0].floatValue == sentinel else {
+                                throw ScratchBufferTestError.contentsChanged
+                            }
                         }
+                        return iterations
                     } catch {
-                        XCTFail("Operation failed: \(error)")
+                        await barrier.abort()
+                        throw error
                     }
                 }
             }
+            return try await group.reduce(0, +)
         }
+        XCTAssertEqual(verifiedIterations, workers * iterations)
     }
 
     // MARK: - Embedding Extractor Memory Edge Cases

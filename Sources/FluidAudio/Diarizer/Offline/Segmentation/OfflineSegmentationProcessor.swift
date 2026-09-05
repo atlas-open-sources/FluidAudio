@@ -47,6 +47,8 @@ struct OfflineSegmentationProcessor {
         config: OfflineDiarizerConfig,
         chunkHandler: SegmentationChunkHandler? = nil
     ) async throws -> SegmentationOutput {
+        // Each process invocation owns its buffers through awaited predictions.
+        let scratchBuffers = memoryOptimizer.makeScratchBuffers()
         let totalSamples = audioSource.sampleCount
         guard totalSamples > 0 else {
             throw OfflineDiarizationError.noSpeechDetected
@@ -97,7 +99,7 @@ struct OfflineSegmentationProcessor {
         func performWarmup() async throws {
             let warmupShape: [NSNumber] = [1, 1, NSNumber(value: chunkSize)]
             let warmupKey = "offline_segmentation_warmup_\(chunkSize)"
-            let warmupArray = try memoryOptimizer.getPooledBuffer(
+            let warmupArray = try scratchBuffers.buffer(
                 key: warmupKey,
                 shape: warmupShape,
                 dataType: .float32
@@ -218,7 +220,7 @@ struct OfflineSegmentationProcessor {
                 NSNumber(value: chunkSize),
             ]
             let bufferKey = "offline_segmentation_audio_\(batchCount)_\(chunkSize)"
-            let audioArray = try memoryOptimizer.getPooledBuffer(
+            let audioArray = try scratchBuffers.buffer(
                 key: bufferKey,
                 shape: shape,
                 dataType: .float32

@@ -14,7 +14,6 @@ final class SegmentationProcessorEdgeCaseTests: XCTestCase {
 
     override func tearDown() {
         processor = nil
-        ANEMemoryOptimizer().clearBufferPool()
         super.tearDown()
     }
 

@@ -6,15 +6,17 @@ import XCTest
 final class ANEMemoryOptimizerTests: XCTestCase {
 
     var optimizer: ANEMemoryOptimizer!
+    var scratchBuffers: ANEScratchBuffers!
 
     override func setUp() {
         super.setUp()
         optimizer = ANEMemoryOptimizer()
+        scratchBuffers = optimizer.makeScratchBuffers()
     }
 
     override func tearDown() {
-        // Clean up any pooled buffers
-        optimizer.clearBufferPool()
+        scratchBuffers = nil
+        optimizer = nil
         super.tearDown()
     }
 
@@ -69,14 +71,14 @@ final class ANEMemoryOptimizerTests: XCTestCase {
         let key = "test_buffer"
 
         // Get buffer from pool
-        let buffer1 = try optimizer.getPooledBuffer(
+        let buffer1 = try scratchBuffers.buffer(
             key: key,
             shape: shape,
             dataType: .float32
         )
 
         // Get same buffer again
-        let buffer2 = try optimizer.getPooledBuffer(
+        let buffer2 = try scratchBuffers.buffer(
             key: key,
             shape: shape,
             dataType: .float32
@@ -89,13 +91,13 @@ final class ANEMemoryOptimizerTests: XCTestCase {
     func testBufferPoolDifferentKeys() throws {
         let shape = [3, 1000] as [NSNumber]
 
-        let buffer1 = try optimizer.getPooledBuffer(
+        let buffer1 = try scratchBuffers.buffer(
             key: "buffer1",
             shape: shape,
             dataType: .float32
         )
 
-        let buffer2 = try optimizer.getPooledBuffer(
+        let buffer2 = try scratchBuffers.buffer(
             key: "buffer2",
             shape: shape,
             dataType: .float32
@@ -109,7 +111,7 @@ final class ANEMemoryOptimizerTests: XCTestCase {
         let key = "changing_buffer"
 
         // Create with one shape
-        let buffer1 = try optimizer.getPooledBuffer(
+        let buffer1 = try scratchBuffers.buffer(
             key: key,
             shape: [3, 1000] as [NSNumber],
             dataType: .float32
@@ -117,7 +119,7 @@ final class ANEMemoryOptimizerTests: XCTestCase {
         XCTAssertEqual(buffer1.count, 3000)
 
         // Request with different shape
-        let buffer2 = try optimizer.getPooledBuffer(
+        let buffer2 = try scratchBuffers.buffer(
             key: key,
             shape: [5, 2000] as [NSNumber],
             dataType: .float32
@@ -130,22 +132,22 @@ final class ANEMemoryOptimizerTests: XCTestCase {
 
     func testClearPool() throws {
         // Create multiple buffers
-        _ = try optimizer.getPooledBuffer(
+        _ = try scratchBuffers.buffer(
             key: "buffer1",
             shape: [100] as [NSNumber],
             dataType: .float32
         )
-        _ = try optimizer.getPooledBuffer(
+        _ = try scratchBuffers.buffer(
             key: "buffer2",
             shape: [200] as [NSNumber],
             dataType: .float32
         )
 
         // Clear pool
-        optimizer.clearBufferPool()
+        scratchBuffers.removeAll()
 
         // Get buffer again - should be new instance
-        let newBuffer = try optimizer.getPooledBuffer(
+        let newBuffer = try scratchBuffers.buffer(
             key: "buffer1",
             shape: [100] as [NSNumber],
             dataType: .float32
@@ -198,7 +200,7 @@ final class ANEMemoryOptimizerTests: XCTestCase {
         var buffers: [MLMultiArray] = []
 
         for i in 0..<100 {
-            let buffer = try optimizer.getPooledBuffer(
+            let buffer = try scratchBuffers.buffer(
                 key: "pressure_test_\(i)",
                 shape: [1000, 1000] as [NSNumber],  // 4MB each
                 dataType: .float32
@@ -206,8 +208,8 @@ final class ANEMemoryOptimizerTests: XCTestCase {
             buffers.append(buffer)
         }
 
-        // Clear pool should release references
-        optimizer.clearBufferPool()
+        // Clear cached references; retained caller buffers remain alive.
+        scratchBuffers.removeAll()
 
         // Verify we can still create new buffers
         let newBuffer = try optimizer.createAlignedArray(
@@ -219,25 +221,47 @@ final class ANEMemoryOptimizerTests: XCTestCase {
 
     // MARK: - Thread Safety Tests
 
-    func testConcurrentBufferAccess() {
-        let expectation = XCTestExpectation(description: "Concurrent access")
-        expectation.expectedFulfillmentCount = 10
+    func testConcurrentBufferAccess() async throws {
+        let allocator = try XCTUnwrap(optimizer)
+        let workers = 10
+        let barrier = ScratchBufferTestBarrier(participants: workers)
 
-        DispatchQueue.concurrentPerform(iterations: 10) { index in
-            do {
-                let buffer = try optimizer.getPooledBuffer(
-                    key: "concurrent_\(index % 3)",  // Share some keys
-                    shape: [100] as [NSNumber],
-                    dataType: .float32
-                )
-                XCTAssertEqual(buffer.count, 100)
-                expectation.fulfill()
-            } catch {
-                XCTFail("Failed to get buffer: \(error)")
+        let results = try await withThrowingTaskGroup(of: ScratchBufferObservation.self) { group in
+            for index in 0..<workers {
+                group.addTask {
+                    do {
+                        let scratch = allocator.makeScratchBuffers()
+                        let buffer = try scratch.buffer(key: "shared_key", shape: [100], dataType: .float32)
+                        let sentinel = Float(index + 1)
+                        for element in 0..<buffer.count {
+                            buffer[element] = NSNumber(value: sentinel)
+                        }
+                        let address = Int(bitPattern: buffer.dataPointer)
+
+                        // All same-key buffers are live before any worker verifies its contents.
+                        try await barrier.arriveAndWait()
+                        let contents = (0..<buffer.count).map { buffer[$0].floatValue }
+                        let reused = try scratch.buffer(key: "shared_key", shape: [100], dataType: .float32)
+                        return ScratchBufferObservation(
+                            address: address,
+                            contents: contents,
+                            expectedValue: sentinel,
+                            reusedWithinOperation: reused === buffer
+                        )
+                    } catch {
+                        await barrier.abort()
+                        throw error
+                    }
+                }
             }
+            return try await group.reduce(into: []) { $0.append($1) }
         }
 
-        wait(for: [expectation], timeout: 5.0)
+        XCTAssertEqual(Set(results.map(\.address)).count, workers)
+        for result in results {
+            XCTAssertEqual(result.contents, Array(repeating: result.expectedValue, count: 100))
+            XCTAssertTrue(result.reusedWithinOperation)
+        }
     }
 
     // MARK: - Performance Tests
@@ -261,7 +285,7 @@ final class ANEMemoryOptimizerTests: XCTestCase {
         measure {
             do {
                 for i in 0..<1000 {
-                    _ = try optimizer.getPooledBuffer(
+                    _ = try scratchBuffers.buffer(
                         key: "perf_test_\(i % 10)",  // Reuse 10 buffers
                         shape: [3, 16000] as [NSNumber],
                         dataType: .float32

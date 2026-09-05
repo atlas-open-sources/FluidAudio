@@ -5,6 +5,19 @@ import XCTest
 
 final class ARPALanguageModelTests: XCTestCase {
 
+    func testBundledMedicalLanguageModel() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "sample_medical", withExtension: "arpa"))
+        let model = try ARPALanguageModel.load(from: url)
+
+        XCTAssertEqual(model.unigrams.count, 15)
+        XCTAssertEqual(model.bigrams.values.reduce(0) { $0 + $1.count }, 12)
+        XCTAssertEqual(
+            model.score(word: "pressure", prev: "blood"),
+            -0.1 * ARPALanguageModel.log10ToNat,
+            accuracy: 0.001
+        )
+    }
+
     // MARK: - Helpers
 
     /// Create a temporary ARPA file with the given content and return its URL.

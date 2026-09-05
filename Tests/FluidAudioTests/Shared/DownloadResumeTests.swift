@@ -24,6 +24,18 @@ final class DownloadResumeTests: XCTestCase {
         try? FileManager.default.removeItem(at: workDir)
     }
 
+    func testStoppedProtocolDoesNotDeliverDelayedFailure() async throws {
+        ResumeStubURLProtocol.enqueue(
+            .init(status: 200, headers: [:], chunks: [Data("partial".utf8)], failAfterChunks: 1))
+        let recorder = FailureClientRecorder()
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/stopped"))
+        let loader = ResumeStubURLProtocol(request: URLRequest(url: url), cachedResponse: nil, client: recorder)
+        loader.startLoading()
+        loader.stopLoading()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(recorder.failureCount, 0)
+    }
+
     // MARK: - Helpers
 
     private var stubConfiguration: URLSessionConfiguration {
@@ -250,6 +262,10 @@ final class DownloadResumeTests: XCTestCase {
 /// including mid-body connection drops (`failAfterChunks`).
 final class ResumeStubURLProtocol: URLProtocol {
 
+    private let deliveryLock = NSRecursiveLock()
+    private let failureIdentifier = UUID()
+    private var stopped = false
+
     struct Script {
         let status: Int
         let headers: [String: String]
@@ -265,6 +281,8 @@ final class ResumeStubURLProtocol: URLProtocol {
     }
 
     private static let lock = NSLock()
+    // Guarded by the same lock as the request scripts. Queue closures only carry IDs.
+    nonisolated(unsafe) private static var pendingFailures: [UUID: ResumeStubURLProtocol] = [:]
     nonisolated(unsafe) private static var scripts: [Script] = []
     nonisolated(unsafe) private static var requests: [URLRequest] = []
 
@@ -273,6 +291,7 @@ final class ResumeStubURLProtocol: URLProtocol {
         defer { lock.unlock() }
         scripts = []
         requests = []
+        pendingFailures.removeAll()
     }
 
     static func enqueue(_ script: Script) {
@@ -298,6 +317,9 @@ final class ResumeStubURLProtocol: URLProtocol {
     override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        deliveryLock.lock()
+        defer { deliveryLock.unlock() }
+        guard !stopped else { return }
         guard let script = Self.dequeue(recording: request), let url = request.url else {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
             return
@@ -343,10 +365,21 @@ final class ResumeStubURLProtocol: URLProtocol {
     /// drop the delivered bytes, which breaks resume tests that rely on the
     /// partial surviving the drop (seen flaky on CI runners).
     private func failAfterFlush() {
-        let client = self.client
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { [self] in
-            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+        let identifier = failureIdentifier
+        Self.lock.withLock { Self.pendingFailures[identifier] = self }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            guard let loader = Self.lock.withLock({ Self.pendingFailures.removeValue(forKey: identifier) }) else {
+                return
+            }
+            loader.deliverPendingFailure()
         }
+    }
+
+    private func deliverPendingFailure() {
+        deliveryLock.lock()
+        defer { deliveryLock.unlock() }
+        guard !stopped else { return }
+        client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
     }
 
     /// Behave like a real range-capable server for `body`: 206 + slice when
@@ -384,7 +417,12 @@ final class ResumeStubURLProtocol: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        deliveryLock.lock()
+        defer { deliveryLock.unlock() }
+        stopped = true
+        _ = Self.lock.withLock { Self.pendingFailures.removeValue(forKey: failureIdentifier) }
+    }
 }
 
 /// Lock-guarded accumulator for progress events (tests only).
@@ -398,4 +436,23 @@ private final class ProgressRecorder: Sendable {
     func snapshot() -> [(written: Int64, expected: Int64)] {
         values.withLock { $0 }
     }
+}
+
+/// Records only terminal failures for the protocol stop-loading regression.
+private final class FailureClientRecorder: NSObject, URLProtocolClient {
+    private let failures = OSAllocatedUnfairLock<Int>(initialState: 0)
+    var failureCount: Int { failures.withLock { $0 } }
+
+    func urlProtocol(_ protocol: URLProtocol, didFailWithError error: Error) {
+        failures.withLock { $0 += 1 }
+    }
+    func urlProtocol(_ protocol: URLProtocol, wasRedirectedTo request: URLRequest, redirectResponse: URLResponse) {}
+    func urlProtocol(_ protocol: URLProtocol, cachedResponseIsValid cachedResponse: CachedURLResponse) {}
+    func urlProtocol(
+        _ protocol: URLProtocol, didReceive response: URLResponse, cacheStoragePolicy policy: URLCache.StoragePolicy
+    ) {}
+    func urlProtocol(_ protocol: URLProtocol, didLoad data: Data) {}
+    func urlProtocolDidFinishLoading(_ protocol: URLProtocol) {}
+    func urlProtocol(_ protocol: URLProtocol, didReceive challenge: URLAuthenticationChallenge) {}
+    func urlProtocol(_ protocol: URLProtocol, didCancel challenge: URLAuthenticationChallenge) {}
 }

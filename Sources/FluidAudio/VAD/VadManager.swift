@@ -17,6 +17,8 @@ public actor VadManager {
     public let config: VadConfig
     private let audioConverter: AudioConverter = AudioConverter()
     private let memoryOptimizer: ANEMemoryOptimizer = ANEMemoryOptimizer()
+    // Shared only by the synchronous, actor-isolated prediction below.
+    private let scratchBuffers = ANEMemoryOptimizer().makeScratchBuffers()
 
     /// Model expects 4096 new samples (256ms at 16kHz) plus 64-sample context (total 4160)
     public static let chunkSize = 4096
@@ -185,7 +187,7 @@ public actor VadManager {
         // No normalization - preserve original amplitude information for VAD
 
         // Process through unified model
-        let (rawProbability, newHiddenState, newCellState) = try await processUnifiedModel(
+        let (rawProbability, newHiddenState, newCellState) = try processUnifiedModel(
             processedChunk,
             inputState: currentState,
             model: loadedModel
@@ -209,21 +211,21 @@ public actor VadManager {
         _ audioChunk: [Float],
         inputState: VadState,
         model: MLModel
-    ) async throws -> (Float, [Float], [Float]) {
+    ) throws -> (Float, [Float], [Float]) {
         do {
             let result: (Float, [Float], [Float]) = try autoreleasepool {
                 // Reuse ANE-aligned buffers to avoid surface churn between invocations
-                let audioArray = try memoryOptimizer.getPooledBuffer(
+                let audioArray = try scratchBuffers.buffer(
                     key: "vad_audio_input",
                     shape: [1, NSNumber(value: Self.modelInputSize)],
                     dataType: .float32
                 )
-                let hiddenStateArray = try memoryOptimizer.getPooledBuffer(
+                let hiddenStateArray = try scratchBuffers.buffer(
                     key: "vad_hidden_state",
                     shape: [1, NSNumber(value: Self.stateSize)],
                     dataType: .float32
                 )
-                let cellStateArray = try memoryOptimizer.getPooledBuffer(
+                let cellStateArray = try scratchBuffers.buffer(
                     key: "vad_cell_state",
                     shape: [1, NSNumber(value: Self.stateSize)],
                     dataType: .float32

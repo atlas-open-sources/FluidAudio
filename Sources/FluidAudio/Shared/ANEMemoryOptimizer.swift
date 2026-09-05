@@ -1,16 +1,15 @@
 import Accelerate
 import CoreML
 import Foundation
-import Metal
 
-/// ANE-optimized memory management for speaker diarization pipeline
-public final class ANEMemoryOptimizer {
+/// Stateless ANE-aligned allocation and copy operations.
+///
+/// The allocator can be shared between concurrent operations. Mutable arrays cannot:
+/// create a separate scratch session for each operation that needs sequential reuse.
+public final class ANEMemoryOptimizer: Sendable {
     // Use shared ANE constants
     public static let aneAlignment = ANEMemoryUtils.aneAlignment
     public static let aneTileSize = ANEMemoryUtils.aneTileSize
-
-    private var bufferPool: [String: MLMultiArray] = [:]
-    private let bufferLock = NSLock()
 
     public init() {}
 
@@ -32,84 +31,28 @@ public final class ANEMemoryOptimizer {
         }
     }
 
-    /// Calculate optimal strides for ANE tile processing
-    private func calculateOptimalStrides(
-        for shape: [NSNumber],
-        dataType: MLMultiArrayDataType
-    ) -> [NSNumber] {
-        return ANEMemoryUtils.calculateOptimalStrides(for: shape)
+    /// Create mutable scratch storage owned by one sequential operation.
+    ///
+    /// Create the session inside the operation, before its processing loop. Keep it
+    /// through any awaited inference and output consumption. Do not store it on a
+    /// shared worker or use it from overlapping operations, including reentrant
+    /// calls on an actor. The session deliberately does not conform to Sendable.
+    public func makeScratchBuffers() -> ANEScratchBuffers {
+        ANEScratchBuffers(allocator: self)
     }
 
-    /// Get or create a reusable buffer from pool
-    public func getPooledBuffer(
-        key: String,
-        shape: [NSNumber],
-        dataType: MLMultiArrayDataType
-    ) throws -> MLMultiArray {
-        bufferLock.lock()
-        defer { bufferLock.unlock() }
-
-        if let existing = bufferPool[key] {
-            // Verify shape matches
-            if existing.shape == shape && existing.dataType == dataType {
-                return existing
-            }
-        }
-
-        // Create new buffer
-        let buffer = try createAlignedArray(shape: shape, dataType: dataType)
-        bufferPool[key] = buffer
-        return buffer
-    }
-
-    /// Initialize a reusable buffer in the pool
-    public func initializePooledBuffer(
-        key: String,
-        shape: [NSNumber],
-        dataType: MLMultiArrayDataType
-    ) throws {
-        bufferLock.lock()
-        defer { bufferLock.unlock() }
-        // Create new buffer
-        bufferPool[key] = try createAlignedArray(shape: shape, dataType: dataType)
-    }
-
-    /// Clear buffer pool to free memory
-    public func clearBufferPool() {
-        bufferLock.lock()
-        defer { bufferLock.unlock() }
-
-        bufferPool.removeAll()
-    }
-
-    /// Create zero-copy memory view between models
+    /// Create a zero-copy memory view between models, retaining the source storage.
+    /// The view shares mutable bytes with its source and requires serialized access.
     public func createZeroCopyView(
         from sourceArray: MLMultiArray,
         shape: [NSNumber],
         offset: Int = 0
     ) throws -> MLMultiArray {
-        // Ensure we have enough data
-        let sourceElements = sourceArray.shape.map { $0.intValue }.reduce(1, *)
-        let viewElements = shape.map { $0.intValue }.reduce(1, *)
-
-        guard offset + viewElements <= sourceElements else {
+        do {
+            return try ANEMemoryUtils.createZeroCopyView(from: sourceArray, offset: offset, shape: shape)
+        } catch ANEMemoryUtils.ANEMemoryError.invalidShape {
             throw DiarizerError.invalidArrayBounds
         }
-
-        // Calculate byte offset
-        let elementSize = ANEMemoryUtils.getElementSize(for: sourceArray.dataType)
-
-        let byteOffset = offset * elementSize
-        let offsetPointer = sourceArray.dataPointer.advanced(by: byteOffset)
-
-        // Create view with same data but new shape
-        return try MLMultiArray(
-            dataPointer: offsetPointer,
-            shape: shape,
-            dataType: sourceArray.dataType,
-            strides: calculateOptimalStrides(for: shape, dataType: sourceArray.dataType),
-            deallocator: nil  // No deallocation since it's a view
-        )
     }
 
     /// Copy data using ANE-optimized memory operations

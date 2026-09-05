@@ -105,6 +105,10 @@ public enum ANEMemoryUtils {
             return 4
         case .float64, .double:
             return 8
+        #if compiler(>=6.2)
+        case .int8:
+            return MemoryLayout<Int8>.stride
+        #endif
         case .int32:
             return MemoryLayout<Int32>.stride
         @unknown default:
@@ -112,25 +116,27 @@ public enum ANEMemoryUtils {
         }
     }
 
-    /// Create a zero-copy view of an MLMultiArray slice
+    /// Create a zero-copy view of an MLMultiArray slice.
+    /// The view retains its source storage, including when passed to a feature provider.
+    /// Both arrays share mutable bytes; callers must serialize their reads and writes.
     public static func createZeroCopyView(
         from array: MLMultiArray,
         offset: Int,
         shape: [NSNumber],
         strides: [NSNumber]? = nil
     ) throws -> MLMultiArray {
-        // Validate bounds using stride-aware backing size (accounts for ANE padding)
+        // The last addressable element is known; allocator tail padding is not.
+        // Use every dimension so transposed and padded layouts share the same check.
         let elementSize = getElementSize(for: array.dataType)
-        let viewStrides = strides ?? calculateOptimalStrides(for: shape)
-        let viewBackingElements =
-            shape.isEmpty ? 0 : viewStrides[0].intValue * shape[0].intValue
-        let sourceBackingElements =
-            array.shape.isEmpty ? 0 : array.strides[0].intValue * array.shape[0].intValue
-        let byteOffset = offset * elementSize
-
-        guard byteOffset + viewBackingElements * elementSize <= sourceBackingElements * elementSize else {
+        let viewStrides = try strides ?? ANEMemoryViewLayout.alignedStrides(shape: shape)
+        let viewSpan = try ANEMemoryViewLayout.span(shape: shape, strides: viewStrides)
+        let sourceSpan = try ANEMemoryViewLayout.span(shape: array.shape, strides: array.strides)
+        guard offset >= 0, offset <= sourceSpan, viewSpan <= sourceSpan - offset else {
             throw ANEMemoryError.invalidShape
         }
+        let (byteOffset, offsetOverflow) = offset.multipliedReportingOverflow(by: elementSize)
+        let (_, sourceOverflow) = sourceSpan.multipliedReportingOverflow(by: elementSize)
+        guard !offsetOverflow, !sourceOverflow else { throw ANEMemoryError.invalidShape }
 
         // Create view with offset pointer
         let offsetPointer = array.dataPointer.advanced(by: byteOffset)
@@ -139,8 +145,11 @@ public enum ANEMemoryUtils {
             dataPointer: offsetPointer,
             shape: shape,
             dataType: array.dataType,
-            strides: strides ?? calculateOptimalStrides(for: shape),
-            deallocator: nil  // No deallocation for views
+            strides: viewStrides,
+            deallocator: { [array] _ in
+                // The source owns the allocation. Release it only after the view is gone.
+                withExtendedLifetime(array) {}
+            }
         )
     }
 

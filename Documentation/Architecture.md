@@ -422,9 +422,11 @@ characteristics in ways the diarizer's clustering wasn't tuned for.
   downmix. Used by VAD, Diarization, ASR.
 - `AudioMelSpectrogram` — log-mel for ASR (not used by VAD/Diarization
   because their CoreML models do their own feature extraction).
-- `ANEMemoryOptimizer` — page-aligned `MLMultiArray` allocations. Used
-  by anything that hits ANE in a hot loop (TDT decoder, VAD, segmentation,
-  embedding).
+- `ANEMemoryOptimizer` — stateless, 64-byte-aligned `MLMultiArray`
+  allocation and copy operations. VAD, segmentation and embedding reuse
+  buffers through operation-owned `ANEScratchBuffers`; mutable scratch
+  sessions are not shared between concurrent operations. See the
+  [scratch-buffer API migration](ANEScratchBuffersMigration.md).
 - `AppLogger` — category-based `os.Logger` wrapper. One logger per
   component.
 - `MLModelConfigurationUtils` — default `MLComputeUnits` selection,

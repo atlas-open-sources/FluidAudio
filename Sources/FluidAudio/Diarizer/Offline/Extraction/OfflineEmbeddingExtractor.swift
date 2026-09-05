@@ -18,26 +18,6 @@ private struct OfflineEmbeddingPending: Sendable {
     let startTime: Double
     let endTime: Double
     let embedding256: [Float]
-
-    init(
-        chunkIndex: Int,
-        speakerIndex: Int,
-        startFrame: Int,
-        endFrame: Int,
-        frameWeights: [Float],
-        startTime: Double,
-        endTime: Double,
-        embedding256: [Float]
-    ) {
-        self.chunkIndex = chunkIndex
-        self.speakerIndex = speakerIndex
-        self.startFrame = startFrame
-        self.endFrame = endFrame
-        self.frameWeights = frameWeights
-        self.startTime = startTime
-        self.endTime = endTime
-        self.embedding256 = embedding256
-    }
 }
 
 private struct OfflineChunkBatchInfo: Sendable {
@@ -45,18 +25,6 @@ private struct OfflineChunkBatchInfo: Sendable {
     let chunkOffsetSeconds: Double
     let frameDuration: Double
     let speakerWeights: [[Float]]
-
-    init(
-        chunkIndex: Int,
-        chunkOffsetSeconds: Double,
-        frameDuration: Double,
-        speakerWeights: [[Float]]
-    ) {
-        self.chunkIndex = chunkIndex
-        self.chunkOffsetSeconds = chunkOffsetSeconds
-        self.frameDuration = frameDuration
-        self.speakerWeights = speakerWeights
-    }
 }
 
 @available(macOS 14.0, iOS 17.0, *)
@@ -300,6 +268,8 @@ struct OfflineEmbeddingExtractor {
         audioSource: AudioSampleSource,
         segmentationStream: S
     ) async throws -> [TimedEmbedding] where S.Element == SegmentationChunk {
+        // Transpose scratch stays owned by this extraction even while PLDA awaits.
+        let scratchBuffers = memoryOptimizer.makeScratchBuffers()
         var embeddings: [TimedEmbedding] = []
         embeddings.reserveCapacity(config.embeddingBatchSize * 8)
 
@@ -454,7 +424,7 @@ struct OfflineEmbeddingExtractor {
                 NSNumber(value: speakerCount),
             ]
             let rowMajorKey = "offline_embedding_row_major_\(frameCount)_\(speakerCount)"
-            let rowMajorBuffer = try memoryOptimizer.getPooledBuffer(
+            let rowMajorBuffer = try scratchBuffers.buffer(
                 key: rowMajorKey,
                 shape: rowMajorShape,
                 dataType: .float32
@@ -475,7 +445,7 @@ struct OfflineEmbeddingExtractor {
                 NSNumber(value: frameCount),
             ]
             let transposedKey = "offline_embedding_transposed_\(speakerCount)_\(frameCount)"
-            let transposedBuffer = try memoryOptimizer.getPooledBuffer(
+            let transposedBuffer = try scratchBuffers.buffer(
                 key: transposedKey,
                 shape: transposedShape,
                 dataType: .float32
@@ -773,10 +743,8 @@ struct OfflineEmbeddingExtractor {
         }
 
         let options = MLPredictionOptions()
-        if #available(macOS 14.0, iOS 17.0, *) {
-            for array in audioArrays {
-                array.prefetchToNeuralEngine()
-            }
+        for array in audioArrays {
+            array.prefetchToNeuralEngine()
         }
 
         let batchProvider = MLArrayBatchProvider(array: providers)
@@ -880,10 +848,8 @@ struct OfflineEmbeddingExtractor {
             ]
         )
         let options = MLPredictionOptions()
-        if #available(macOS 14.0, iOS 17.0, *) {
-            fbankFeatures.prefetchToNeuralEngine()
-            weightsArray.prefetchToNeuralEngine()
-        }
+        fbankFeatures.prefetchToNeuralEngine()
+        weightsArray.prefetchToNeuralEngine()
 
         let output = try embeddingModel.prediction(from: provider, options: options)
         guard let embeddingArray = output.featureValue(for: embeddingOutputName)?.multiArrayValue else {

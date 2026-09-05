@@ -91,10 +91,6 @@ public enum MandarinNumberNormalizer {
             result += "千"
         }
         if h > 0 {
-            if pendingZero {
-                result += "零"
-                pendingZero = false
-            }
             result.append(digits[h])
             result += "百"
         } else if q > 0 && (t > 0 || u > 0) {

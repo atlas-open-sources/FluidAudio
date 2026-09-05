@@ -423,7 +423,6 @@ struct VadBenchmark {
     ) async throws -> VadBenchmarkResult {
         logger.info("Running VAD benchmark on \(testFiles.count) files...")
 
-        let memoryOptimizer = ANEMemoryOptimizer()
         let startTime = Date()
         var predictions: [Int] = []
         var groundTruth: [Int] = []
@@ -476,10 +475,6 @@ struct VadBenchmark {
                 predictions.append(0)
                 groundTruth.append(testFile.expectedLabel)
                 fileDurations.append(Date().timeIntervalSince(fileStartTime))
-            }
-
-            if (index + 1) % 10 == 0 {
-                memoryOptimizer.clearBufferPool()
             }
         }
 
