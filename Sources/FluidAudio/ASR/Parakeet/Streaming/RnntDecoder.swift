@@ -77,19 +77,17 @@ public final class RnntDecoder {
         var predictedFrames: [Int] = []
         var eouDetected = false
 
-        let T = encoderOutput.shape[2].intValue
+        let frameCount = encoderOutput.shape[2].intValue
         let hiddenDim = encoderOutput.shape[1].intValue
 
         // Determine how many frames to decode
         // NeMo truncates encoder output to valid_out_len for streaming
-        let maxT = validOutLen.map { min($0, T) } ?? T
+        let maxT = validOutLen.map { min($0, frameCount) } ?? frameCount
 
         // Skip overlapping frames from previous chunk
         let startT = min(skipFrames, maxT)
 
         outerLoop: for t in startT..<maxT {
-            let globalT = timeOffset + t
-
             // Extract encoder step
             let encoderStep = try extractEncoderStep(from: encoderOutput, timeIndex: t, hiddenDim: hiddenDim)
 
@@ -256,8 +254,8 @@ public final class RnntDecoder {
 
         // Copy last frame (t=T-1)
         // Matches Python: decoder_step[:, :, -1:]
-        let T = input.shape[2].intValue
-        let lastT = T - 1
+        let frameCount = input.shape[2].intValue
+        let lastT = frameCount - 1
 
         let stride0 = input.strides[0].intValue
         let stride1 = input.strides[1].intValue

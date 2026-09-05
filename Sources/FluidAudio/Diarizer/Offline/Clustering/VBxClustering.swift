@@ -126,8 +126,8 @@ struct VBxClustering {
                 speakerCount: speakerCount,
                 maxIterations: config.vbx.maxIterations,
                 epsilon: config.vbx.convergenceTolerance,
-                Fa: config.clustering.warmStartFa,
-                Fb: config.clustering.warmStartFb,
+                acousticScale: config.clustering.warmStartFa,
+                speakerRegularizationScale: config.clustering.warmStartFb,
                 initSmoothing: 7.0
             )
             gammaSource = result.gamma
@@ -173,8 +173,8 @@ struct VBxClustering {
         speakerCount: Int,
         maxIterations: Int,
         epsilon: Double,
-        Fa: Double,
-        Fb: Double,
+        acousticScale: Double,
+        speakerRegularizationScale: Double,
         initSmoothing: Double
     ) throws -> (gamma: [Double], pi: [Double], elbos: [Double]) {
         var gamma = initialGamma
@@ -264,7 +264,7 @@ struct VBxClustering {
             }
         }
 
-        var G = [Double](repeating: 0, count: frameCount)
+        var gaussianLogLikelihoods = [Double](repeating: 0, count: frameCount)
         let logConstant = Double(dimension) * log(2.0 * Double.pi)
         features.withUnsafeBufferPointer { featurePtr in
             guard let featureBase = featurePtr.baseAddress else { return }
@@ -277,11 +277,11 @@ struct VBxClustering {
                     &sumSq,
                     dimensionLength
                 )
-                G[t] = -0.5 * (sumSq + logConstant)
+                gaussianLogLikelihoods[t] = -0.5 * (sumSq + logConstant)
             }
         }
 
-        let ratio = Fa / Fb
+        let ratio = acousticScale / speakerRegularizationScale
         var invL = [Double](repeating: 0, count: speakerCount * dimension)
         var alpha = [Double](repeating: 0, count: speakerCount * dimension)
         var temp = [Double](repeating: 0, count: speakerCount * dimension)
@@ -485,9 +485,9 @@ struct VBxClustering {
                     for t in 0..<frameCount {
                         let row = logBase.advanced(by: t * speakerCount)
                         vDSP_vaddD(row, 1, offsetBase, 1, row, 1, speakerLength)
-                        var g = G[t]
+                        var g = gaussianLogLikelihoods[t]
                         vDSP_vsaddD(row, 1, &g, row, 1, speakerLength)
-                        var faScale = Fa
+                        var faScale = acousticScale
                         vDSP_vsmulD(row, 1, &faScale, row, 1, speakerLength)
                     }
                 }
@@ -644,7 +644,7 @@ struct VBxClustering {
             }
 
             var elbo = logLikelihood
-            elbo += Fb * 0.5 * (sumLogInv - sumInv - sumAlphaSq + Double(invLCount))
+            elbo += speakerRegularizationScale * 0.5 * (sumLogInv - sumInv - sumAlphaSq + Double(invLCount))
 
             if iteration < elbos.count {
                 elbos[iteration] = elbo
@@ -688,7 +688,7 @@ struct VBxClustering {
         initialClusters: [Int],
         constraints: SpeakerCountConstraints?
     ) -> VBxOutput {
-        var output = refine(rhoFeatures: rhoFeatures, initialClusters: initialClusters)
+        let output = refine(rhoFeatures: rhoFeatures, initialClusters: initialClusters)
 
         guard let constraints = constraints else {
             return output

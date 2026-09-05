@@ -47,10 +47,7 @@
 #ifdef __SOFTFP__
 #define NO_INCLUDE_FENV
 #endif
-#ifdef NO_INCLUDE_FENV
-#pragma message("Do not use fenv header.")
-#else
-#pragma message("Use fenv header.")
+#ifndef NO_INCLUDE_FENV
 /* The following #pragma is necessary even if it generates a warning in many
    compilers. Quoting https://en.cppreference.com/w/cpp/numeric/fenv:
    "The floating-point environment access and modification is only meaningful
@@ -60,7 +57,6 @@
    to the floating-point environment anyway."
 */
 #pragma STDC FENV_ACCESS ON
-#pragma messag("If there is a warning about unknown #pragma STDC FENV_ACCESS, this can be ignored.")
 #include <fenv.h>
 #endif
 

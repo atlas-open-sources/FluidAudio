@@ -105,6 +105,10 @@ public enum ANEMemoryUtils {
             return 4
         case .float64, .double:
             return 8
+        #if compiler(>=6.2)
+        case .int8:
+            return MemoryLayout<Int8>.stride
+        #endif
         case .int32:
             return MemoryLayout<Int32>.stride
         @unknown default:

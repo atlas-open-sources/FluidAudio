@@ -26,7 +26,9 @@ let package = Package(
                 "FastClusterWrapper",
                 "MachTaskSelfWrapper",
             ],
-            path: "Sources/FluidAudio"
+            path: "Sources/FluidAudio",
+            exclude: ["ASR/Parakeet/Unified/benchmark.md"],
+            cSettings: [.define("ACCELERATE_NEW_LAPACK")]
         ),
         .target(
             name: "FastClusterWrapper",
@@ -52,6 +54,9 @@ let package = Package(
             dependencies: [
                 "FluidAudio",
                 "FluidAudioCLI",
+            ],
+            resources: [
+                .copy("ASR/Parakeet/SlidingWindow/CTC/sample_medical.arpa")
             ]
         ),
     ],
