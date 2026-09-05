@@ -49,7 +49,6 @@ enum DiarizationBenchmarkUtils {
     // MARK: - File Paths
 
     static func getAMIFiles(split: AMISplit = .test, dataset: Dataset = .ami, maxFiles: Int?) -> [String] {
-        let allMeetings = getAMIMeetings(split: split)
 
         var availableMeetings: [String] = []
         for meeting in DatasetDownloader.officialAMITestSet {

@@ -12,7 +12,7 @@ import Foundation
 enum CohereBenchmark {
     private static let logger = AppLogger(category: "CohereBenchmark")
 
-    private static nonisolated(unsafe) let fleursToCohereLanguage: [String: CohereAsrConfig.Language] = [
+    private static let fleursToCohereLanguage: [String: CohereAsrConfig.Language] = [
         "en_us": .english,
         "fr_fr": .french,
         "de_de": .german,

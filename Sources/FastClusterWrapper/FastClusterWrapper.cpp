@@ -10,16 +10,7 @@
 #define fc_isnan(X) ((X) != (X))
 #endif
 
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wpragma-messages"
-#endif
-
 #include "fastcluster_internal.hpp"
-
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
 
 namespace {
 

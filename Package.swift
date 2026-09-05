@@ -33,6 +33,7 @@ let package = Package(
             ],
             path: "Sources/FluidAudio",
             exclude: ["ASR/Parakeet/Unified/benchmark.md"],
+            cSettings: [.define("ACCELERATE_NEW_LAPACK")],
             swiftSettings: [
                 // Package@swift-6.2.swift exposes these as opt-out traits (#990).
                 .define("TTS"),
@@ -84,6 +85,7 @@ let package = Package(
                 "FluidAudioCLI",
             ],
             resources: [
+                .copy("ASR/Parakeet/SlidingWindow/CTC/sample_medical.arpa"),
                 .process("TTS/LuxTts/Resources"),
                 .process("TTS/PocketTTS/Fixtures"),
                 // Real recordings (cleared for public release by the speaker) for the

@@ -226,7 +226,6 @@ public class NemotronMultilingualFleursBenchmark {
                 continue
             }
 
-            let audioURL = URL(fileURLWithPath: sample.audioPath)
             let audioSamples: [Float]
             do {
                 audioSamples = try audioConverter.resampleAudioFile(path: sample.audioPath)

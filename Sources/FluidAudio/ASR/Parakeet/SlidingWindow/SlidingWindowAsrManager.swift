@@ -349,7 +349,6 @@ public actor SlidingWindowAsrManager {
         let chunk = config.chunkSamples
         let right = config.rightContextSamples
         let left = config.leftContextSamples
-        let sampleRate = config.asrConfig.sampleRate
 
         var currentAbsEnd = bufferStartIndex + sampleBuffer.count
         while currentAbsEnd >= (nextWindowCenterStart + chunk + right) {
@@ -384,7 +383,6 @@ public actor SlidingWindowAsrManager {
     private func flushRemaining() async {
         let chunk = config.chunkSamples
         let left = config.leftContextSamples
-        let sampleRate = config.asrConfig.sampleRate
 
         var currentAbsEnd = bufferStartIndex + sampleBuffer.count
         while currentAbsEnd > nextWindowCenterStart {  // process until we exhaust
