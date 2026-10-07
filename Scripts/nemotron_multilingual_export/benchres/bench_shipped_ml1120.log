@@ -1,0 +1,36 @@
+[09:50:01.176] [INFO] [FluidAudio.Main] Host environment: macOS Version 26.5.1 (Build 25F80), arch=arm64, chip=Apple M4 Pro, cores=14/14, mem=48 GB, rosetta=false
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] Nemotron Multilingual FLEURS Benchmark
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] ==================================================
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] Dataset: fleurs (FluidInference/fleurs-full)
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] Languages: en_us, cmn_hans_cn
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] Samples per language: 100
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] Model dir: /Users/timapple/Library/Application Support/FluidAudio/Models/nemotron-multilingual/multilingual/1120ms
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] Dataset repo: FluidInference/fleurs-full
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] Cache dir: /Users/timapple/Library/Application Support/FluidAudio/FLEURS-full
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] Output: benchres/bench_shipped_ml1120.json
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] Starting Nemotron Multilingual FLEURS Benchmark
+[09:50:01.179] [INFO] [FluidAudio.NemotronMultilingualFleurs] ==================================================
+[09:50:01.183] [INFO] [FluidAudio.FLEURSBenchmark] FLEURS en_us already downloaded
+[09:50:01.200] [INFO] [FluidAudio.FLEURSBenchmark] FLEURS cmn_hans_cn already downloaded
+[09:50:01.206] [INFO] [FluidAudio.FLEURSBenchmark] Loaded 100 samples for en_us
+[09:50:01.214] [INFO] [FluidAudio.FLEURSBenchmark] Loaded 100 samples for cmn_hans_cn
+[09:50:01.214] [INFO] [FluidAudio.NemotronMultilingualFleurs] Loaded 200 samples across 2 languages
+[09:50:01.214] [INFO] [FluidAudio.NemotronMultilingualStreaming] Loading Nemotron multilingual CoreML models from /Users/timapple/Library/Application Support/FluidAudio/Models/nemotron-multilingual/multilingual/1120ms...
+[09:50:01.215] [INFO] [FluidAudio.NemotronMultilingualStreaming] Loaded multilingual config: 1120ms chunks, vocab=13087, 128 prompts, default=101
+[09:50:13.875] [INFO] [FluidAudio.NemotronMultilingualStreaming] Loaded decoder_joint — using merged inner-loop path
+[09:50:13.875] [INFO] [FluidAudio.NemotronMultilingualStreaming] Smart-spec: assets missing (joint_noencproj_batched.mlpackage); falling back to legacy inner loop
+[09:50:13.906] [INFO] [FluidAudio.NemotronMultilingualStreaming] Model warm-up complete
+[09:50:13.906] [INFO] [FluidAudio.NemotronMultilingualStreaming] Nemotron multilingual models loaded successfully (1120ms chunks).
+[09:50:13.906] [INFO] [FluidAudio.NemotronMultilingualStreaming] Prompt id set to 0 for language en-US
+[09:50:31.510] [INFO] [FluidAudio.NemotronMultilingualFleurs] en_us [en-US]: WER=7.9%, CER=3.5%, RTFx=60.9x (100 processed)
+[09:50:31.510] [INFO] [FluidAudio.NemotronMultilingualStreaming] Prompt id set to 4 for language zh-CN
+[09:50:50.429] [INFO] [FluidAudio.NemotronMultilingualFleurs] cmn_hans_cn [zh-CN]: WER=17.2%, CER=17.2%, RTFx=65.4x (100 processed)
+[09:50:50.438] [INFO] [FluidAudio.NemotronMultilingualFleurs] Results saved to benchres/bench_shipped_ml1120.json
+[09:50:50.438] [INFO] [FluidAudio.Main] Peak memory usage (process-wide): 0.601 GB
+
+Language     | Prompt   | WER%   | CER%   | RTFx   | Duration  | Processed | Skipped
+--------------------------------------------------------------------------------
+en_us        | en-US    | 7.9    | 3.5    | 60.9   | 953.9s    | 100       | -
+cmn_hans_cn  | zh-CN    | 17.2   | 17.2   | 65.4   | 1104.8s   | 100       | -
+--------------------------------------------------------------------------------
+AVERAGE      | —        | 12.5   | 10.4   | 63.1  

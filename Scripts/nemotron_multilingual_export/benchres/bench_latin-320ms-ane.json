@@ -1,0 +1,35 @@
+{
+  "benchmark" : "Nemotron Multilingual FLEURS",
+  "config" : {
+    "dataset" : "fleurs",
+    "languages" : [
+      "en_us"
+    ],
+    "modelDir" : "\/Users\/timapple\/src\/nemotron-export\/out\/latin-320ms-ane",
+    "samplesPerLanguage" : 100
+  },
+  "dataset" : "fleurs",
+  "results" : [
+    {
+      "cer" : 0.046491481544870823,
+      "language" : "en_us",
+      "processingTime" : 42.26858651638031,
+      "promptLanguageCode" : "en-US",
+      "rtfx" : 22.567113750783768,
+      "samplesProcessed" : 100,
+      "samplesSkipped" : 0,
+      "totalDuration" : 953.87999999999954,
+      "wer" : 0.091426158284727957
+    }
+  ],
+  "summary" : {
+    "averageCER" : 0.046491481544870823,
+    "averageRTFx" : 22.567113750783768,
+    "averageWER" : 0.091426158284727957,
+    "totalDuration" : 953.87999999999954,
+    "totalProcessingTime" : 42.26858651638031,
+    "totalSamples" : 100,
+    "totalSkipped" : 0
+  },
+  "timestamp" : "2026-08-29T10:13:36Z"
+}

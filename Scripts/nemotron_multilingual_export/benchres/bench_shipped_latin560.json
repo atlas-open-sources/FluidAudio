@@ -1,0 +1,35 @@
+{
+  "benchmark" : "Nemotron Multilingual FLEURS",
+  "config" : {
+    "dataset" : "fleurs",
+    "languages" : [
+      "en_us"
+    ],
+    "modelDir" : "\/Users\/timapple\/Library\/Application Support\/FluidAudio\/Models\/nemotron-multilingual\/latin\/560ms",
+    "samplesPerLanguage" : 100
+  },
+  "dataset" : "fleurs",
+  "results" : [
+    {
+      "cer" : 0.040262937014568248,
+      "language" : "en_us",
+      "processingTime" : 18.639559030532837,
+      "promptLanguageCode" : "en-US",
+      "rtfx" : 51.175030398384465,
+      "samplesProcessed" : 100,
+      "samplesSkipped" : 0,
+      "totalDuration" : 953.87999999999954,
+      "wer" : 0.080366289273288843
+    }
+  ],
+  "summary" : {
+    "averageCER" : 0.040262937014568248,
+    "averageRTFx" : 51.175030398384465,
+    "averageWER" : 0.080366289273288843,
+    "totalDuration" : 953.87999999999954,
+    "totalProcessingTime" : 18.639559030532837,
+    "totalSamples" : 100,
+    "totalSkipped" : 0
+  },
+  "timestamp" : "2026-08-29T08:50:01Z"
+}
