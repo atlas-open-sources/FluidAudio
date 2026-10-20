@@ -65,7 +65,8 @@ let package = Package(
                 .target(name: "LuxTtsG2pResources", condition: .when(traits: ["TTS"])),
             ],
             path: "Sources/FluidAudio",
-            exclude: ["ASR/Parakeet/Unified/benchmark.md"]
+            exclude: ["ASR/Parakeet/Unified/benchmark.md"],
+            cSettings: [.define("ACCELERATE_NEW_LAPACK")]
         ),
         // Separate target so the ~1 MB G2P bundle drops out with the `TTS` trait.
         .target(
@@ -111,6 +112,7 @@ let package = Package(
                 "FluidAudioCLI",
             ],
             resources: [
+                .copy("ASR/Parakeet/SlidingWindow/CTC/sample_medical.arpa"),
                 .process("TTS/LuxTts/Resources"),
                 .process("TTS/PocketTTS/Fixtures"),
                 // Real recordings (cleared for public release by the speaker) for the
