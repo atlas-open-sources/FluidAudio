@@ -172,3 +172,13 @@ final class ARPALanguageModelTests: XCTestCase {
         XCTAssertEqual(withLM, "the cat")
     }
 }
+
+
+extension ARPALanguageModelTests {
+    func testBundledMedicalFixtureIsAccessible() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "sample_medical", withExtension: "arpa"))
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(text.contains("patient"))
+        XCTAssertTrue(text.contains("ngram 1=15"))
+    }
+}
