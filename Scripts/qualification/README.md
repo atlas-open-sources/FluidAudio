@@ -44,6 +44,10 @@ Timing is explicitly exploratory when host identity differs/is absent or concurr
 
 The replay CLI feeds real audio in ordered short chunks and records partial transcript, process duration, first detected language and (only on forks exposing it) current detected language. Offline causal replay is not real-time device latency; pacing is explicit. Word/switch timestamps require independently reviewed reference annotation. Never treat a first-language getter as a latest-language getter.
 
+For the candidate exposing `currentDetectedLanguage()`, build with `swift build -c release --jobs 4 -Xswiftc -DQUALIFICATION_FORK`. Omit that define on upstream versions without the API. Check `latest_language_supported` in each replay's start record; null on an unsupported build is unavailable evidence, not zero switches. Pass `--language auto` explicitly for auto-prompt observations; omitting it selects the model metadata's default prompt. Retain binary/model/input hashes alongside replay output. The first getter can include soft evidence on the fork, not only emitted language tags.
+
+Use separate `--scratch-path` directories for trait configurations, especially when excluding NeMo text processing. A reused build directory can retain imported modules across trait changes; a library-only build does not prove the executable links without native NeMo symbols. Keep clean build logs and inspect the executable's undefined symbols.
+
 Qualify export axes separately: checkpoint/revision, lookahead, encoder precision, decoder fusion, vocabulary, compute units and platform. Require NeMo versus CoreML same-checkpoint output tests before attributing a difference solely to quantization. Available cached320ms has full vocabulary and duplicated Latin/multilingual folders; folder labels are not model provenance. Historical80ms/6bit artifacts must be acquired and hashed before a fresh comparison. A missing variant is blocked, never skipped into a green matrix.
 
 ## Acceptance matrix
