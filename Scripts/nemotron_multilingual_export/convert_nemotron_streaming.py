@@ -69,7 +69,7 @@ def convert(
     output_dir: Path = typer.Option(Path("nemotron_coreml"), help="Output directory"),
     encoder_cu: str = typer.Option("CPU_AND_NE", help="Encoder compute units"),
     precision: str = typer.Option("FLOAT32", help="FLOAT32 or FLOAT16"),
-    keep_fp32_ops: str = typer.Option("", help="Comma-separated layer_norm,softmax to retain in FP32 during mixed FP16 export"),
+    keep_fp32_ops: str = typer.Option("", help="Comma-separated layer_norm,softmax,add to retain in FP32 during mixed FP16 export"),
     lookahead: int = typer.Option(6, help="Encoder lookahead tokens: 0=80ms, 3=320ms, 6=560ms, 13=1120ms"),
     prune_tokenizer: Optional[Path] = typer.Option(
         None,
@@ -86,8 +86,8 @@ def convert(
         raise typer.BadParameter("precision must be FLOAT32 or FLOAT16")
     _parse_cu(encoder_cu)
     preserved_ops = frozenset(x.strip() for x in keep_fp32_ops.split(",") if x.strip())
-    if preserved_ops - {"layer_norm", "softmax"} or (preserved_ops and precision.upper() != "FLOAT16"):
-        raise typer.BadParameter("keep-fp32-ops supports layer_norm,softmax only with FLOAT16")
+    if preserved_ops - {"layer_norm", "softmax", "add"} or (preserved_ops and precision.upper() != "FLOAT16"):
+        raise typer.BadParameter("keep-fp32-ops supports layer_norm,softmax,add only with FLOAT16")
     receipt = begin_export(output_dir, checkpoint, checkpoint_sha256, validation_audio, seed)
     random.seed(seed)
     np.random.seed(seed)
