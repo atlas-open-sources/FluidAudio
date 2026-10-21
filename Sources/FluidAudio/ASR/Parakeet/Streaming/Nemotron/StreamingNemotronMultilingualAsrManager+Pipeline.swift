@@ -194,7 +194,7 @@ extension StreamingNemotronMultilingualAsrManager {
             // Save mel cache for next chunk (last 9 frames). Only needed on
             // the non-prefetched path — the triple-stage helper already
             // advanced melCache when we awaited it at the previous chunk's end.
-            melCache = try extractMelCache(from: chunkMel)
+            melCache = try extractMelCache(from: inputMel)
         }
 
         // TRIPLE-STAGE PIPELINE: dispatch preprocessor[t+1] + encoder[t+1]

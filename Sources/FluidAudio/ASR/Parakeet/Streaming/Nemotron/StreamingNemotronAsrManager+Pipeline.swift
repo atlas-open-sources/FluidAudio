@@ -62,7 +62,7 @@ extension StreamingNemotronAsrManager {
         }
 
         // Save mel cache for next chunk (last 9 frames)
-        melCache = try extractMelCache(from: chunkMel)
+        melCache = try extractMelCache(from: inputMel)
 
         // 4. RNNT decode loop for each encoder frame
         let numEncoderFrames = encoded.shape[2].intValue
@@ -305,9 +305,10 @@ extension StreamingNemotronAsrManager {
         return result
     }
 
-    internal func extractMelCache(from chunkMel: MLMultiArray) throws -> MLMultiArray {
-        // Extract last preEncodeCache (9) frames from chunk mel
-        let chunkFrames = chunkMel.shape[2].intValue
+    /// Extract the rolling history from the assembled encoder input, not raw mel output.
+    internal func extractMelCache(from encoderInput: MLMultiArray) throws -> MLMultiArray {
+        // Copy consumed frames plus any prior history needed by short chunks.
+        let chunkFrames = encoderInput.shape[2].intValue
         let cacheFrames = min(config.preEncodeCache, chunkFrames)
 
         let cache = try MLMultiArray(
@@ -315,12 +316,12 @@ extension StreamingNemotronAsrManager {
             dataType: .float32
         )
 
-        let srcPtr = chunkMel.dataPointer.bindMemory(to: Float.self, capacity: chunkMel.count)
+        let srcPtr = encoderInput.dataPointer.bindMemory(to: Float.self, capacity: encoderInput.count)
         let dstPtr = cache.dataPointer.bindMemory(to: Float.self, capacity: cache.count)
 
-        let srcStride0 = chunkMel.strides[0].intValue
-        let srcStride1 = chunkMel.strides[1].intValue
-        let srcStride2 = chunkMel.strides[2].intValue
+        let srcStride0 = encoderInput.strides[0].intValue
+        let srcStride1 = encoderInput.strides[1].intValue
+        let srcStride2 = encoderInput.strides[2].intValue
         let dstStride0 = cache.strides[0].intValue
         let dstStride1 = cache.strides[1].intValue
         let dstStride2 = cache.strides[2].intValue

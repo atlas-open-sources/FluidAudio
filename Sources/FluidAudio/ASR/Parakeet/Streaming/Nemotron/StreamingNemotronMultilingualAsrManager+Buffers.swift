@@ -130,28 +130,32 @@ extension StreamingNemotronMultilingualAsrManager {
         }
         let encoderProj = encOutput.featureValue(for: "encoder_proj")?.multiArrayValue
         let newMelCache = try extractMelCachePure(
-            chunkMel: chunkMel,
+            encoderInput: inputMel,
             melFeatures: melFeatures,
             preEncodeCache: preEncodeCache
         )
         return (encoded, encoderProj, cacheChOut, cacheTOut, cacheLenOut, newMelCache)
     }
 
+    /// Retain history from the assembled encoder input, which contains only
+    /// consumed frames and prior history. Raw preprocessor output also contains
+    /// an invalid final frame; copying it shifts the next chunk's history.
+    /// Keeping the assembled tail also preserves older frames for 80 ms chunks.
     nonisolated internal static func extractMelCachePure(
-        chunkMel: MLMultiArray,
+        encoderInput: MLMultiArray,
         melFeatures: Int,
         preEncodeCache: Int
     ) throws -> MLMultiArray {
-        let chunkFrames = chunkMel.shape[2].intValue
+        let chunkFrames = encoderInput.shape[2].intValue
         let cacheFrames = min(preEncodeCache, chunkFrames)
         let cache = try MLMultiArray(
             shape: [1, NSNumber(value: melFeatures), NSNumber(value: cacheFrames)],
             dataType: .float32
         )
-        let srcPtr = chunkMel.dataPointer.bindMemory(to: Float.self, capacity: chunkMel.count)
+        let srcPtr = encoderInput.dataPointer.bindMemory(to: Float.self, capacity: encoderInput.count)
         let dstPtr = cache.dataPointer.bindMemory(to: Float.self, capacity: cache.count)
-        let srcStride1 = chunkMel.strides[1].intValue
-        let srcStride2 = chunkMel.strides[2].intValue
+        let srcStride1 = encoderInput.strides[1].intValue
+        let srcStride2 = encoderInput.strides[2].intValue
         let dstStride1 = cache.strides[1].intValue
         let dstStride2 = cache.strides[2].intValue
         let startT = chunkFrames - cacheFrames
@@ -259,8 +263,9 @@ extension StreamingNemotronMultilingualAsrManager {
         return result
     }
 
-    internal func extractMelCache(from chunkMel: MLMultiArray) throws -> MLMultiArray {
-        let chunkFrames = chunkMel.shape[2].intValue
+    /// Extract the rolling history from the assembled encoder input, not raw mel output.
+    internal func extractMelCache(from encoderInput: MLMultiArray) throws -> MLMultiArray {
+        let chunkFrames = encoderInput.shape[2].intValue
         let cacheFrames = min(config.preEncodeCache, chunkFrames)
 
         let cache = try MLMultiArray(
@@ -268,12 +273,12 @@ extension StreamingNemotronMultilingualAsrManager {
             dataType: .float32
         )
 
-        let srcPtr = chunkMel.dataPointer.bindMemory(to: Float.self, capacity: chunkMel.count)
+        let srcPtr = encoderInput.dataPointer.bindMemory(to: Float.self, capacity: encoderInput.count)
         let dstPtr = cache.dataPointer.bindMemory(to: Float.self, capacity: cache.count)
 
-        let srcStride0 = chunkMel.strides[0].intValue
-        let srcStride1 = chunkMel.strides[1].intValue
-        let srcStride2 = chunkMel.strides[2].intValue
+        let srcStride0 = encoderInput.strides[0].intValue
+        let srcStride1 = encoderInput.strides[1].intValue
+        let srcStride2 = encoderInput.strides[2].intValue
         let dstStride0 = cache.strides[0].intValue
         let dstStride1 = cache.strides[1].intValue
         let dstStride2 = cache.strides[2].intValue
