@@ -33,6 +33,7 @@ let package = Package(
             ],
             path: "Sources/FluidAudio",
             exclude: ["ASR/Parakeet/Unified/benchmark.md"],
+            cSettings: [.define("ACCELERATE_NEW_LAPACK")],
             swiftSettings: [
                 // Package@swift-6.2.swift exposes these as opt-out traits (#990).
                 .define("TTS"),
