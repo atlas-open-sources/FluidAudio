@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import os
+import platform
 
 
 def sha256(path):
@@ -13,6 +15,27 @@ def sha256(path):
         for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def runtime_provenance():
+    source = Path(__file__).resolve().parent
+    git = ['git', '-C', str(source)]
+    return {
+        'git_commit': subprocess.check_output(git + ['rev-parse', 'HEAD'], text=True).strip(),
+        'git_dirty': bool(subprocess.check_output(git + ['status', '--porcelain'], text=True).strip()),
+        'argv': list(sys.argv), 'python': sys.version,
+        'platform': platform.platform(), 'macos': platform.mac_ver()[0],
+        'machine': platform.machine(),
+        'hardware': subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip(),
+        'offline_environment': {key: os.environ.get(key) for key in
+                                ['HF_HUB_OFFLINE', 'HF_DATASETS_OFFLINE', 'WANDB_MODE']},
+    }
+
+
+def validate_compute_units(name):
+    if name not in {'CPU_ONLY', 'CPU_AND_NE', 'CPU_AND_GPU', 'ALL'}:
+        raise ValueError('Invalid compute units')
+    return name
 
 
 def begin_export(output, checkpoint, expected_hash, audio, seed):
@@ -27,8 +50,7 @@ def begin_export(output, checkpoint, expected_hash, audio, seed):
         'checkpoint': {'path': str(checkpoint.resolve()), 'sha256': expected_hash},
         'validation_audio': {'path': str(audio.resolve()), 'sha256': sha256(audio)},
         'seed': seed, 'argv': sys.argv,
-        'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-        'python': sys.version,
+        **runtime_provenance(),
         'packages': {d.metadata['Name']: d.version for d in importlib.metadata.distributions()},
         'source_hashes': {str(p.relative_to(Path(__file__).parent)): sha256(p) for p in Path(__file__).parent.rglob('*.py')},
     }
@@ -87,10 +109,19 @@ def begin_derivative(model_dir, output_dir, options):
     if output_dir.exists():
         raise ValueError('Output already exists; use a new isolated directory')
     parent_path = model_dir / 'export-receipt.json'
+    validate_compute_units(options.get('compute_units'))
     parent = json.loads(parent_path.read_text())
     if parent['status'] != 'passed' or parent['options']['precision'] != 'FLOAT16':
         raise ValueError('Derivative requires a passed FP16 parent export')
-    for relative, expected in parent['output_sha256'].items():
+    required = ['encoder.mlpackage', 'preprocessor.mlpackage', 'decoder.mlpackage', 'joint.mlpackage']
+    hashes = parent.get('output_sha256', {})
+    if not hashes or any(not any(k.startswith(name + '/') for k in hashes) for name in required):
+        raise ValueError('Incomplete parent component hash manifest')
+    if any(name not in hashes for name in ['metadata.json', 'tokenizer.json', 'encoder-validation.npz']):
+        raise ValueError('Incomplete parent companion hash manifest')
+    for relative, expected in hashes.items():
+        if Path(relative).is_absolute() or '..' in Path(relative).parts:
+            raise ValueError('Unsafe parent hash path')
         if sha256(model_dir / relative) != expected:
             raise ValueError(f'Parent changed: {relative}')
     fused = model_dir / 'decoder_joint.mlpackage'
@@ -105,6 +136,7 @@ def begin_derivative(model_dir, output_dir, options):
     random.seed(42)
     output_dir.mkdir(parents=True)
     receipt = {'schema_version': 1, 'status': 'started', 'parent_receipt_sha256': sha256(parent_path), 'parent_directory': str(model_dir.resolve()),
+               **runtime_provenance(),
                'source_hashes': {str(p.relative_to(Path(__file__).parent)): sha256(p) for p in Path(__file__).parent.rglob('*.py')},
                'checkpoint': parent['checkpoint'], 'options': options, 'seed': 42,
                'parent_output_sha256': parent['output_sha256'],

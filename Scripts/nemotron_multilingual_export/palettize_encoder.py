@@ -2,7 +2,7 @@
 """Palettize a verified FP16 parent; measure numerical changes on real input."""
 from pathlib import Path
 import shutil
-from qualification_provenance import begin_derivative, finish_derivative
+from qualification_provenance import begin_derivative, finish_derivative, validate_compute_units
 
 import typer
 import coremltools as ct
@@ -31,6 +31,7 @@ def palettize(
     ),
     group_size: int = typer.Option(16, help="channels per LUT for per_grouped_channel"),
     per_channel_scale: bool = typer.Option(False, help="add per-channel scales to the LUT"),
+    compute_units: str = typer.Option("CPU_ONLY", help="Explicit compute units for parent and transformed model validation"),
 ) -> None:
     encoder_path = model_dir / "encoder.mlpackage"
     if not encoder_path.exists():
@@ -39,17 +40,18 @@ def palettize(
         raise ValueError("Invalid palette bits or mode")
     if granularity not in {"per_tensor", "per_grouped_channel"} or group_size < 1:
         raise ValueError("Invalid granularity/group size")
-    receipt = begin_derivative(model_dir, output_dir, {"nbits": nbits, "mode": mode, "granularity": granularity, "group_size": group_size, "per_channel_scale": per_channel_scale})
+    units = getattr(ct.ComputeUnit, validate_compute_units(compute_units))
+    receipt = begin_derivative(model_dir, output_dir, {"compute_units": compute_units, "nbits": nbits, "mode": mode, "granularity": granularity, "group_size": group_size, "per_channel_scale": per_channel_scale})
 
     baseline = _dir_size_mb(encoder_path)
-    model = ct.models.MLModel(str(encoder_path))
+    model = ct.models.MLModel(str(encoder_path), compute_units=units)
     # per_grouped_channel LUT ops are iOS18+ (spec version 9). The exports were
     # cut at iOS17; the app requires iOS 18.2, so raising the spec is free.
     spec = model.get_spec()
     if spec.specificationVersion < 9:
         spec.specificationVersion = 9
         model = ct.models.MLModel(
-            spec, weights_dir=model.weights_dir, compute_units=ct.ComputeUnit.CPU_ONLY
+            spec, weights_dir=model.weights_dir, compute_units=units
         )
         typer.echo("spec version raised to 9 (iOS18)")
     if granularity == "per_grouped_channel":
@@ -78,6 +80,7 @@ def palettize(
         "decoder_joint.mlpackage",
         "metadata.json",
         "tokenizer.json",
+        "decoder-joint-receipt.json",
     ]:
         src = model_dir / name
         dst = output_dir / name
@@ -86,6 +89,7 @@ def palettize(
                 shutil.copytree(src, dst)
             else:
                 shutil.copy2(src, dst)
+    palettized = ct.models.MLModel(str(out_encoder), compute_units=units)
     finish_derivative(model_dir, output_dir, receipt, palettized)
     typer.echo("Done!")
 

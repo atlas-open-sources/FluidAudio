@@ -204,14 +204,14 @@ def convert(
         pieces_out = None  # built later from the model tokenizer
 
     # Create wrappers
-    preprocessor = PreprocessorWrapper(model.preprocessor.eval())
+    preprocessor = PreprocessorWrapper(model.preprocessor.eval()).eval()
     encoder_streaming = EncoderStreamingWrapper(
         encoder.eval(),
         prompt_kernel=model.prompt_kernel.eval(),
         num_prompts=num_prompts,
     )
-    decoder = DecoderWrapper(model.decoder.eval())
-    joint = JointWrapper(model.joint.eval())
+    decoder = DecoderWrapper(model.decoder.eval()).eval()
+    joint = JointWrapper(model.joint.eval()).eval()
 
     model.decoder._rnnt_export = True
 
@@ -358,6 +358,7 @@ def convert(
 
     metadata = {
         "model": DEFAULT_MODEL_ID,
+        "checkpoint_sha256": checkpoint_sha256,
         "sample_rate": sample_rate,
         "mel_features": mel_features,
         "chunk_mel_frames": CHUNK_MEL_FRAMES,
