@@ -67,6 +67,8 @@ def main():
     if not 1 <= args.max_symbols <= 100:
         raise ValueError('Invalid max-symbols')
     receipt_path = args.model_dir / 'export-receipt.json'
+    if not receipt_path.exists():
+        receipt_path = args.model_dir / 'derivative-receipt.json'
     parent = json.loads(receipt_path.read_text())
     verify_manifest(args.model_dir, parent)
     checkpoint_sha = sha256(args.checkpoint)

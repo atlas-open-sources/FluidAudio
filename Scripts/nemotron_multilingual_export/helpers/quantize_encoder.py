@@ -83,6 +83,7 @@ def quantize(
     config = OptimizationConfig(
         global_config=OpLinearQuantizerConfig(
             mode="linear",
+            dtype="int8",
             granularity=granularity,
         )
     )
