@@ -189,7 +189,8 @@ final class NemotronMultilingualTests: XCTestCase {
     func testEvidenceAbstainsOnSustainedNearTie() {
         var evidence = SoftLanguageEvidence()
         let results = feed(&evidence, Array(repeating: ["es": 0.48, "sl": 0.47, "pt": 0.05], count: 60))
-        XCTAssertTrue(results.allSatisfy { $0 == nil }, "a near-tie must never commit; got \(results.compactMap { $0 })")
+        XCTAssertTrue(
+            results.allSatisfy { $0 == nil }, "a near-tie must never commit; got \(results.compactMap { $0 })")
     }
 
     /// Break the tie by a clear margin and the SAME rule commits — so the
@@ -610,5 +611,42 @@ final class NemotronMultilingualTests: XCTestCase {
         try data.write(to: tmpURL)
         defer { try? FileManager.default.removeItem(at: tmpURL) }
         return try NemotronMultilingualStreamingConfig(from: tmpURL)
+    }
+}
+
+extension NemotronMultilingualTests {
+    func testRescueReplayCannotChangeLiveLanguageOrEvidence() async {
+        let manager = StreamingNemotronMultilingualAsrManager()
+        await manager.recordDetectedLanguage("en-US")
+        await manager.recordDetectedLanguage("es-419")
+        await manager.exerciseRescueLanguageUpdates()
+        let first = await manager.detectedLanguage()
+        let current = await manager.currentDetectedLanguage()
+        XCTAssertEqual(first, "en-US")
+        XCTAssertEqual(current, "es-419")
+        // One subsequent live reading must not inherit the rescue's accumulated evidence.
+        await manager.applySoftLanguage(candidates: [("en-US", 0), ("es-419", -20)], frameMaxLogit: 0)
+        let afterLiveFrame = await manager.currentDetectedLanguage()
+        XCTAssertEqual(afterLiveFrame, "es-419")
+    }
+
+    func testRescueReplayCannotSeedFirstLanguage() async {
+        let manager = StreamingNemotronMultilingualAsrManager()
+        await manager.exerciseRescueLanguageUpdates()
+        let first = await manager.detectedLanguage()
+        let current = await manager.currentDetectedLanguage()
+        XCTAssertNil(first)
+        XCTAssertNil(current)
+    }
+}
+
+extension StreamingNemotronMultilingualAsrManager {
+    fileprivate func exerciseRescueLanguageUpdates() {
+        inBlankRescue = true
+        defer { inBlankRescue = false }
+        recordDetectedLanguage("en-US")
+        for _ in 0..<20 {
+            applySoftLanguage(candidates: [("en-US", 0), ("es-419", -20)], frameMaxLogit: 0)
+        }
     }
 }
