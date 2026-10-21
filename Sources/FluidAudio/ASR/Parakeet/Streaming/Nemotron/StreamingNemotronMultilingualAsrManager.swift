@@ -1138,6 +1138,8 @@ public actor StreamingNemotronMultilingualAsrManager {
     /// Internal setter used by the pipeline when it encounters a lang-tag
     /// token in the decoder output.
     internal func recordDetectedLanguage(_ language: String) {
+        // Rescue replays older audio; it must not alter live language attribution.
+        guard !inBlankRescue else { return }
         // An expected-languages allowlist (if set) objectively rejects a tag
         // outside it — a momentary misdetection (e.g. a one-frame "tr-TR" in an
         // en/es conversation) is dropped here, not merely smoothed by debounce.
@@ -1294,9 +1296,10 @@ public actor StreamingNemotronMultilingualAsrManager {
     /// Shared tail of both soft readers: read the frame (range gate + allowlist),
     /// fold it into the turn's evidence, and record the language the evidence
     /// has committed to, if any.
-    private func applySoftLanguage(
+    internal func applySoftLanguage(
         candidates: [(piece: String, logit: Float)], frameMaxLogit: Float
     ) {
+        guard !inBlankRescue else { return }
         guard
             let frame = Self.softLanguageFrame(
                 from: candidates, frameMaxLogit: frameMaxLogit, allowed: expectedPrimaryLanguages),

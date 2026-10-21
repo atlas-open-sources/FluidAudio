@@ -62,8 +62,8 @@ struct ProgressReporter: Sendable {
         emit(
             fraction,
             .downloading(completedFiles: fileIndex, totalFiles: totalFiles),
-            completedBytes: completedBytes,
-            totalBytes: totalBytes)
+            completedBytes: totalBytes > 0 ? completedBytes : nil,
+            totalBytes: totalBytes > 0 ? totalBytes : nil)
     }
 
     /// Factory for the per-file live-bytes callback both download loops hand
@@ -94,8 +94,8 @@ struct ProgressReporter: Sendable {
         emit(
             fraction,
             .downloading(completedFiles: completedFiles, totalFiles: totalFiles),
-            completedBytes: completedBytes,
-            totalBytes: totalBytes)
+            completedBytes: totalBytes > 0 ? completedBytes : nil,
+            totalBytes: totalBytes > 0 ? totalBytes : nil)
     }
 
     /// The cached fast path: download phase complete without network.
@@ -192,6 +192,8 @@ final class ConcurrentProgress: Sendable {
         reporter.handler?(
             DownloadProgress(
                 fractionCompleted: counters.maxFraction,
-                phase: .downloading(completedFiles: phaseFiles, totalFiles: totalFiles)))
+                phase: .downloading(completedFiles: phaseFiles, totalFiles: totalFiles),
+                completedBytes: totalBytes > 0 ? bytes : nil,
+                totalBytes: totalBytes > 0 ? totalBytes : nil))
     }
 }
