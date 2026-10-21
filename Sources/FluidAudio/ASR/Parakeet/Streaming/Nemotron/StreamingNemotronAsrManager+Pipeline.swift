@@ -62,7 +62,7 @@ extension StreamingNemotronAsrManager {
         }
 
         // Save mel cache for next chunk (last 9 frames)
-        melCache = try extractMelCache(from: chunkMel)
+        melCache = try extractMelCache(from: inputMel)
 
         // 4. RNNT decode loop for each encoder frame
         let numEncoderFrames = encoded.shape[2].intValue
