@@ -92,3 +92,35 @@ final class ProgressReporterTests: XCTestCase {
         XCTAssertEqual(fraction, 1.0)
     }
 }
+
+extension ProgressReporterTests {
+    func testConcurrentDownloadsPreserveAggregateByteCounts() {
+        let recorder = ProgressStreamRecorder()
+        let reporter = ProgressReporter(handler: { recorder.append($0) }, downloadPhaseWeight: 0.5)
+        let progress = ConcurrentProgress(reporter: reporter, totalBytes: 100, totalFiles: 2)
+        progress.liveBytesCallback(fileIndex: 0)?(20, 40)
+        progress.liveBytesCallback(fileIndex: 1)?(30, 60)
+        _ = progress.fileCompleted(fileIndex: 0, size: 40)
+        _ = progress.fileCompleted(fileIndex: 1, size: 60)
+        let events = recorder.snapshot()
+        XCTAssertEqual(events.map(\.completedBytes), [20, 50, 70, 100])
+        XCTAssertEqual(events.map(\.totalBytes), [100, 100, 100, 100])
+        XCTAssertEqual(events.last?.fractionCompleted, 0.5)
+    }
+
+    func testUnknownTotalsAndNonDownloadPhasesDoNotInventBytes() {
+        let recorder = ProgressStreamRecorder()
+        let reporter = ProgressReporter(handler: { recorder.append($0) }, downloadPhaseWeight: 0.5)
+        reporter.listing()
+        reporter.fileBoundary(completedBytes: 25, totalBytes: 0, completedFiles: 1, totalFiles: 2)
+        let concurrent = ConcurrentProgress(reporter: reporter, totalBytes: 0, totalFiles: 2)
+        _ = concurrent.fileCompleted(fileIndex: 0, size: 25)
+        reporter.cachedModelsAvailable()
+        reporter.compiling(name: "model", index: 1, count: 1)
+        reporter.finished()
+        for event in recorder.snapshot() {
+            XCTAssertNil(event.completedBytes)
+            XCTAssertNil(event.totalBytes)
+        }
+    }
+}
