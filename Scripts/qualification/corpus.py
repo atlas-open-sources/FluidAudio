@@ -4,6 +4,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import re
 from pathlib import Path
 import urllib.request
 
@@ -18,6 +19,28 @@ def fetch(url):
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def verify_object(data, item):
+    """Verify bytes against a pinned HF tree entry, including ordinary Git blobs."""
+    name = item['path']
+    if len(data) != item['size']:
+        raise ValueError(f'upstream object length mismatch: {name}')
+    if item.get('lfs') is not None:
+        expected = item['lfs'].get('oid', '')
+        if not re.fullmatch(r'[0-9a-f]{64}', expected):
+            raise ValueError(f'missing or invalid LFS SHA256: {name}')
+        actual = sha(data)
+    else:
+        expected = item.get('oid', '')
+        if not re.fullmatch(r'[0-9a-f]{40}', expected):
+            raise ValueError(f'missing or invalid Git blob SHA1: {name}')
+        # HF's non-LFS oid is Git's object hash, not SHA1 of the payload alone.
+        header = f'blob {len(data)}\0'.encode('ascii')
+        actual = hashlib.sha1(header + data).hexdigest()
+    if actual != expected:
+        raise ValueError(f'upstream object hash mismatch: {name}')
+    return sha(data)
 
 
 def acquire(root, languages, count):
@@ -38,7 +61,13 @@ def acquire(root, languages, count):
                 url = next((part.split('>')[0].strip().lstrip('<') for part in links.split(',')
                             if 'rel="next"' in part), None)
         prefix = f'https://huggingface.co/datasets/{REPO}/resolve/{REVISION}/'
-        transcript = fetch(prefix + f'{lang}/{lang}.trans.txt').decode('utf-8')
+        transcript_path = f'{lang}/{lang}.trans.txt'
+        transcript_item = next((item for item in listing if item['path'] == transcript_path), None)
+        if transcript_item is None:
+            raise ValueError(f'transcript missing from pinned listing: {transcript_path}')
+        transcript_data = fetch(prefix + transcript_path)
+        verify_object(transcript_data, transcript_item)
+        transcript = transcript_data.decode('utf-8')
         refs = {}
         for line in transcript.splitlines():
             parts = line.split(maxsplit=1)
@@ -60,12 +89,7 @@ def acquire(root, languages, count):
             reference = refs[sample_id]
             target = directory / name
             data = target.read_bytes() if target.exists() else fetch(prefix + item['path'])
-            digest = sha(data)
-            expected = item.get('lfs', {}).get('oid')
-            if expected and digest != expected:
-                raise ValueError(f'upstream audio hash mismatch: {name}')
-            if len(data) != item['size']:
-                raise ValueError(f'audio length mismatch: {name}')
+            digest = verify_object(data, item)
             if not target.exists():
                 target.write_bytes(data)
             return {'language': lang, 'sample_id': sample_id, 'path': f'{lang}/{name}',
