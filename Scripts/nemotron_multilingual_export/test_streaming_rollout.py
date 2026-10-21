@@ -8,13 +8,21 @@ class StreamingConventionTests(unittest.TestCase):
         mel = np.arange(6, dtype=np.float32).reshape(1, 1, 6)
         out, history = prepend_history(mel, None, 5, 2)
         np.testing.assert_array_equal(out, [[[0, 0, 0, 1, 2, 3, 4]]])
-        np.testing.assert_array_equal(history, [[[4, 5]]])
+        np.testing.assert_array_equal(history, [[[3, 4]]])
 
-    def test_warmed_history_uses_last_preprocessor_frames_like_swift(self):
+    def test_warmed_history_excludes_unconsumed_preprocessor_frame(self):
         out, history = prepend_history(np.array([[[6, 7, 8, 9, 10, 11]]], np.float32),
                                        np.array([[[4, 5]]], np.float32), 5, 2)
         np.testing.assert_array_equal(out, [[[4, 5, 6, 7, 8, 9, 10]]])
-        np.testing.assert_array_equal(history, [[[10, 11]]])
+        np.testing.assert_array_equal(history, [[[9, 10]]])
+
+    def test_short_chunk_retains_previous_history_tail(self):
+        previous = np.arange(9, dtype=np.float32).reshape(1, 1, 9)
+        mel = np.arange(9, 18, dtype=np.float32).reshape(1, 1, 9)
+        _, history = prepend_history(mel, previous, 8, 9)
+        np.testing.assert_array_equal(history, np.arange(8, 17).reshape(1, 1, 9))
+        _, first = prepend_history(mel, None, 8, 9)
+        np.testing.assert_array_equal(first, [[[0, 9, 10, 11, 12, 13, 14, 15, 16]]])
 
     def test_bad_history_shape_rejected(self):
         with self.assertRaisesRegex(ValueError, 'History shape'):

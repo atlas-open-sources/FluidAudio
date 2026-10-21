@@ -17,8 +17,8 @@ from qualification_provenance import measure_difference, runtime_provenance, sha
 def prepend_history(mel, previous, frames, history_frames):
     if mel.ndim != 3 or mel.shape[0] != 1 or frames < 1 or history_frames < 1:
         raise ValueError('Invalid mel shape or frame configuration')
-    if mel.shape[2] < history_frames:
-        raise ValueError('Insufficient mel frames for history')
+    if mel.shape[2] < frames:
+        raise ValueError('Insufficient mel frames for current chunk')
     result = np.zeros((1, mel.shape[1], frames + history_frames), dtype=np.float32)
     if previous is not None:
         if previous.shape != (1, mel.shape[1], history_frames):
@@ -26,8 +26,9 @@ def prepend_history(mel, previous, frames, history_frames):
         result[:, :, :history_frames] = previous
     take = min(frames, mel.shape[2])
     result[:, :, history_frames:history_frames + take] = mel[:, :, :take]
-    # Match Swift extractMelCachePure: last frames from the whole preprocessor result.
-    return result, mel[:, :, -history_frames:].copy()
+    # Retain consumed frames, excluding preprocessor padding. The assembled
+    # input also carries older history when a chunk is shorter than the cache.
+    return result, result[:, :, -history_frames:].copy()
 
 
 def validated_frame_count(encoded, length):
