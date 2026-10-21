@@ -130,7 +130,7 @@ extension StreamingNemotronMultilingualAsrManager {
         }
         let encoderProj = encOutput.featureValue(for: "encoder_proj")?.multiArrayValue
         let newMelCache = try extractMelCachePure(
-            chunkMel: chunkMel,
+            chunkMel: inputMel,
             melFeatures: melFeatures,
             preEncodeCache: preEncodeCache
         )
