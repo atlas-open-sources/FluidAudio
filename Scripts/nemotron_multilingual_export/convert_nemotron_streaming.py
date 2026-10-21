@@ -209,7 +209,7 @@ def convert(
         encoder.eval(),
         prompt_kernel=model.prompt_kernel.eval(),
         num_prompts=num_prompts,
-    )
+    ).eval()
     decoder = DecoderWrapper(model.decoder.eval()).eval()
     joint = JointWrapper(model.joint.eval()).eval()
 

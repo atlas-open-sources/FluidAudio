@@ -117,6 +117,8 @@ def run(args, meta, report):
     model = nemo_asr.models.ASRModel.restore_from(str(args.checkpoint), map_location='cpu').eval()
     if int(model.tokenizer.vocab_size) != meta['vocab_size'] or not hasattr(model, 'prompt_kernel'):
         raise ValueError('Wrong checkpoint class or vocabulary')
+    # Match exported prediction network: no training SOS prepended to each token.
+    model.decoder._rnnt_export = True
     model.encoder.set_default_att_context_size(meta['att_context_size'])
     model.encoder.setup_streaming_params(att_context_size=meta['att_context_size'])
     wrappers = {
