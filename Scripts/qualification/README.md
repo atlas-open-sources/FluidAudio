@@ -23,6 +23,23 @@ Run `--prompt auto` separately; a language-prompted run is not auto-detect proof
 
 The wrapper hashes models/binary/corpus, checks exact rows, reference equality, finite timing, positive denominators and zero skipped samples. Input hashes are checked before and after. New output directories only. Timeouts terminate the process group. The CLI reports corpus-weighted per-language errors; legacy macro fields remain labeled for backward compatibility. WER and CJK CER are never pooled as a single quality score. Bootstrap intervals resample paired utterances, not speakers. They quantify sampling uncertainty, not timing repeatability or device variance. Repeat timing runs sequentially with fixed thermal/power conditions before speed claims.
 
+## Receipt and comparison integrity
+
+New runs write schema2 receipts including a SHA256 of the exact `samples.jsonl` bytes. Comparisons verify it before scoring, validate sample rows again, and embed both full receipts plus their hashes and source directories. Self-comparisons and identical source/binary/model/prompt configurations are rejected as source-quality evidence. Repeat runs remain useful timing controls but are not source comparisons. Historical receipts without sample hashes are rejected unless a separate validated sidecar exists:
+
+```sh
+python3 Scripts/qualification/run.py --audit-existing <historical-run> \
+  --corpus <original-corpus> --model <original-model> [--binary <available-binary>]
+```
+
+This checks original corpus/model hashes, every audio hash, rows/references/counts and actual prompt mapping. It writes a fresh `audit.json`, preserving `receipt.json`; comparison binds the sidecar to the original receipt hash and verifies sample output against its newly captured hash. This is a **later audit**, not contemporaneous integrity proof: old sample output was not originally hashed. If the original executable is unavailable or replaced, its original hash remains recorded-only; a current binary is verified only if its hash matches. Build configuration remains declared/unverified and timing uncontrolled. Existing sidecars are never overwritten.
+
+Known-language prompts are resolved against the actual model metadata before launching the CLI, using its FLEURS special mappings and Swift bare-language fallback. Unsupported languages fail instead of silently using the default. Receipts retain requested prompt, matched dictionary key and numeric ID for each language. Auto runs explicitly require an `auto` dictionary entry.
+
+`--build-configuration release` is a declaration, not verified proof of compilation settings. Optional `--build-receipt PATH` must provide matching `configuration`, `binary_sha256`, `revision` and `instrumentation`; the wrapper records the receipt hash and labels this `receipt_matched`, not independently verified compilation. Keep the producing build command and logs with that receipt. Never infer release configuration from a directory name.
+
+Timing is explicitly exploratory when host identity differs/is absent or concurrency is uncontrolled. Optional `--host-id IDENTIFIER --timing-control declared-sequential` records operator declarations; neither proves thermal control or repeatability. Even paired declarations do not establish a performance improvement without repeated sequential measurements. Quality comparisons remain possible across hosts, with timing limitations retained in the comparison output.
+
 ## Causal streaming and model exports
 
 The replay CLI feeds real audio in ordered short chunks and records partial transcript, process duration, first detected language and (only on forks exposing it) current detected language. Offline causal replay is not real-time device latency; pacing is explicit. Word/switch timestamps require independently reviewed reference annotation. Never treat a first-language getter as a latest-language getter.
@@ -57,6 +74,8 @@ Default-change thresholds must be agreed and frozen before evaluation. No automa
 Publish manifests and acquisition instructions by default, not third-party audio archives or private user recordings. Upstream posting requires separate explicit authorization.
 
 ## Harness tests
+
+Set `AGENT_SCRATCH_DIR` to the project-owned scratch directory; tests create and remove only their own receipt fixtures there.
 
 `python3 -m unittest discover -s Scripts/qualification -p 'test_*.py' -v`
 
