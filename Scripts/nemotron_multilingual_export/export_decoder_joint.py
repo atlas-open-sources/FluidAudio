@@ -48,6 +48,14 @@ def export(
         receipt = json.loads((d / "export-receipt.json").read_text())
         if receipt["checkpoint"]["sha256"] != checkpoint_sha256 or receipt["status"] != "passed":
             raise ValueError("Destination must be a passed export of the identical checkpoint")
+        for relative, expected in receipt["output_sha256"].items():
+            if sha256(d / relative) != expected:
+                raise ValueError(f"Destination parent changed: {relative}")
+        metadata = json.loads((d / "metadata.json").read_text())
+        if bool(metadata.get("vocab_pruned", False)) != (prune_tokenizer is not None):
+            raise ValueError("Pruning must match destination vocabulary")
+        if prune_tokenizer is not None and json.loads(prune_tokenizer.read_text()) != json.loads((d / "tokenizer.json").read_text()):
+            raise ValueError("Pruned tokenizer must match destination")
         if (d / "decoder_joint.mlpackage").exists():
             raise ValueError("Refusing to overwrite fused model")
     torch.manual_seed(seed)
@@ -122,7 +130,8 @@ def export(
         target = d / "decoder_joint.mlpackage"
         mlmodel.save(str(target))
         evidence = {"checkpoint_sha256": checkpoint_sha256, "seed": seed, "precision": precision,
-                    "checks": checks, "status": "passed" if passed else "failed",
+                    "parent_receipt_sha256": sha256(d / "export-receipt.json"),
+                    "source_sha256": sha256(Path(__file__)), "checks": checks, "status": "passed" if passed else "failed",
                     "output_hashes": {str(p.relative_to(target)): sha256(p) for p in target.rglob("*") if p.is_file()}}
         (d / "decoder-joint-receipt.json").write_text(json.dumps(evidence, indent=2))
     if not passed:
