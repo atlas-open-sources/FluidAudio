@@ -69,6 +69,7 @@ def convert(
     output_dir: Path = typer.Option(Path("nemotron_coreml"), help="Output directory"),
     encoder_cu: str = typer.Option("CPU_AND_NE", help="Encoder compute units"),
     precision: str = typer.Option("FLOAT32", help="FLOAT32 or FLOAT16"),
+    keep_fp32_ops: str = typer.Option("", help="Comma-separated layer_norm,softmax to retain in FP32 during mixed FP16 export"),
     lookahead: int = typer.Option(6, help="Encoder lookahead tokens: 0=80ms, 3=320ms, 6=560ms, 13=1120ms"),
     prune_tokenizer: Optional[Path] = typer.Option(
         None,
@@ -84,6 +85,9 @@ def convert(
     if precision.upper() not in {"FLOAT32", "FLOAT16"}:
         raise typer.BadParameter("precision must be FLOAT32 or FLOAT16")
     _parse_cu(encoder_cu)
+    preserved_ops = frozenset(x.strip() for x in keep_fp32_ops.split(",") if x.strip())
+    if preserved_ops - {"layer_norm", "softmax"} or (preserved_ops and precision.upper() != "FLOAT16"):
+        raise typer.BadParameter("keep-fp32-ops supports layer_norm,softmax only with FLOAT16")
     receipt = begin_export(output_dir, checkpoint, checkpoint_sha256, validation_audio, seed)
     random.seed(seed)
     np.random.seed(seed)
@@ -211,11 +215,14 @@ def convert(
 
     model.decoder._rnnt_export = True
 
+    compute_precision = ct.precision.FLOAT16 if precision.upper() == "FLOAT16" else ct.precision.FLOAT32
+    if preserved_ops:
+        compute_precision = ct.transform.FP16ComputePrecision(op_selector=lambda op: op.op_type not in preserved_ops)
     settings = ExportSettings(
         output_dir=output_dir,
         compute_units=ct.ComputeUnit.CPU_ONLY,
         deployment_target=ct.target.iOS17,
-        compute_precision=ct.precision.FLOAT16 if precision.upper() == "FLOAT16" else ct.precision.FLOAT32,
+        compute_precision=compute_precision,
         max_audio_seconds=30.0,
         max_symbol_steps=1,
         chunk_size_frames=chunk_frames,
@@ -382,7 +389,7 @@ def convert(
     tokenizer[str(blank_idx_out)] = "<blank>"
     (output_dir / "tokenizer.json").write_text(json.dumps(tokenizer, indent=2))
 
-    finish_export(output_dir, receipt, checks, {"precision": precision.upper(), "lookahead": lookahead, "encoder_cu": encoder_cu})
+    finish_export(output_dir, receipt, checks, {"precision": precision.upper(), "lookahead": lookahead, "encoder_cu": encoder_cu, "keep_fp32_ops": sorted(preserved_ops)})
     typer.echo(f"Done! Exported to {output_dir}")
 
 
