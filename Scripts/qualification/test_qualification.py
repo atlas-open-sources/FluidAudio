@@ -92,6 +92,12 @@ class ComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'repeated runs'):
             compare(self.a, self.b, repetitions=100)
 
+    def test_compute_unit_change_cannot_be_hidden_by_model_change(self):
+        self.update_receipt(self.a, compute_units='cpuOnly')
+        self.update_receipt(self.b, compute_units='cpuAndNeuralEngine', model_sha256='different')
+        with self.assertRaisesRegex(ValueError, 'compute_units'):
+            compare(self.a, self.b, allow_model_change=True, repetitions=100)
+
     def test_model_change_requires_explicit_axis(self):
         self.update_receipt(self.b, model_sha256='different')
         with self.assertRaisesRegex(ValueError, 'identical models'):

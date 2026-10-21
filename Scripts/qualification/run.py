@@ -91,6 +91,9 @@ def build_provenance(args, binary_hash):
 
 
 def run(args):
+    compute_units = getattr(args, 'compute_units', 'cpuAndNeuralEngine')
+    if compute_units not in ('cpuOnly', 'cpuAndGPU', 'cpuAndNeuralEngine', 'all'):
+        raise ValueError('unsupported compute units')
     corpus = args.corpus.resolve()
     manifest_path = corpus / 'manifest.json'
     manifest = json.loads(manifest_path.read_text())
@@ -111,7 +114,7 @@ def run(args):
     cmd = [str(args.binary.resolve()), 'nemotron-multilingual-benchmark', '--model-dir', str(args.model.resolve()),
            '--cache-dir', str(corpus), '--languages', ','.join(languages), '--samples', 'all',
            '--dump-samples', str(rows_file.resolve()), '--output', str((args.output / 'summary.json').resolve()),
-           '--compute-units', 'cpuAndNeuralEngine']
+           '--compute-units', compute_units]
     if args.prompt == 'auto':
         cmd += ['--prompt', 'auto']
     receipt = {'schema': 2, 'revision': args.revision, 'instrumentation': args.instrumentation,
@@ -119,7 +122,7 @@ def run(args):
                'corpus_sha256': digest(manifest_path), 'platform': platform.platform(), 'machine': platform.machine(),
                'resolved_prompts': resolved_prompts, 'timing_control': getattr(args, 'timing_control', 'uncontrolled'),
                'host_id': getattr(args, 'host_id', None),
-               'prompt': args.prompt, 'compute_units': 'cpuAndNeuralEngine',
+               'prompt': args.prompt, 'compute_units': compute_units,
                'measurement': 'whole-utterance throughput; not real-time streaming latency',
                'expected_samples': len(samples), 'command': cmd, 'status': 'running'}
     (args.output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
@@ -207,6 +210,7 @@ if __name__ == '__main__':
         p.add_argument('--' + option, type=Path)
     p.add_argument('--revision')
     p.add_argument('--instrumentation')
+    p.add_argument('--compute-units', choices=('cpuOnly', 'cpuAndGPU', 'cpuAndNeuralEngine', 'all'), default='cpuAndNeuralEngine')
     p.add_argument('--prompt', choices=('known', 'auto'), default='known')
     p.add_argument('--build-configuration', choices=('release', 'debug'), default='release')
     p.add_argument('--build-receipt', type=Path)
