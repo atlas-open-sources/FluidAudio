@@ -32,6 +32,13 @@ def begin_export(output, checkpoint, expected_hash, audio, seed):
         'packages': {d.metadata['Name']: d.version for d in importlib.metadata.distributions()},
         'source_hashes': {str(p.relative_to(Path(__file__).parent)): sha256(p) for p in Path(__file__).parent.rglob('*.py')},
     }
+    source_receipt = checkpoint.parent / 'copy-receipt.json'
+    if source_receipt.is_file():
+        source = json.loads(source_receipt.read_text())
+        if source.get('sha256') != expected_hash or source.get('verified') is not True:
+            raise ValueError('Checkpoint source-copy receipt mismatch')
+        receipt['checkpoint']['source_receipt'] = source
+        receipt['checkpoint']['source_receipt_sha256'] = sha256(source_receipt)
     output.mkdir(parents=True)
     (output / 'export-receipt.json').write_text(json.dumps(receipt, indent=2))
     return receipt
