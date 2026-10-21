@@ -447,9 +447,8 @@ extension StreamingNemotronMultilingualAsrManager {
                 encoderState = enc.makeState()
             }
         }
-        // Same 1-frame preamble as resetStates(): keeps the encoder's
-        // slice_by_index off the zero-length-slice path.
-        cacheLen?[0] = 1
+        // Match resetStates(): the fresh zero-filled cache has no valid frames.
+        // Marking it nonempty can suppress the opening of the rescued speech.
         melCache = nil
         prefetchedMel = nil
         prefetchedEncoded = nil
