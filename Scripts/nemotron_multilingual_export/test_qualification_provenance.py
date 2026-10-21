@@ -1,7 +1,7 @@
 import hashlib
 from pathlib import Path
 import unittest
-from qualification_provenance import begin_export, sha256, measure_difference
+from qualification_provenance import begin_export, sha256, measure_difference, finish_export
 import numpy as np
 
 
@@ -23,6 +23,10 @@ class ProvenanceTests(unittest.TestCase):
 
 
 class NumericalGateTests(unittest.TestCase):
+    def test_missing_components_cannot_pass_vacuously(self):
+        with self.assertRaisesRegex(ValueError, "All four component checks"):
+            finish_export(Path(__file__).parent, {}, {}, {})
+
     def test_integer_lengths_must_match_exactly(self):
         result = measure_difference(np.array([100]), np.array([101]))
         self.assertFalse(result['passed'])
