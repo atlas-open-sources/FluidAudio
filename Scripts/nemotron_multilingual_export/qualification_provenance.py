@@ -111,8 +111,11 @@ def begin_derivative(model_dir, output_dir, options):
     parent_path = model_dir / 'export-receipt.json'
     validate_compute_units(options.get('compute_units'))
     parent = json.loads(parent_path.read_text())
-    if parent['status'] != 'passed' or parent['options']['precision'] != 'FLOAT16':
-        raise ValueError('Derivative requires a passed FP16 parent export')
+    precision = options.get('parent_precision', 'FLOAT16')
+    if precision not in {'FLOAT16', 'FLOAT32'}:
+        raise ValueError('Invalid declared parent precision')
+    if parent['status'] != 'passed' or parent['options']['precision'] != precision:
+        raise ValueError('Derivative requires a passed parent with declared precision (default passed FP16)')
     required = ['encoder.mlpackage', 'preprocessor.mlpackage', 'decoder.mlpackage', 'joint.mlpackage']
     hashes = parent.get('output_sha256', {})
     if not hashes or any(not any(k.startswith(name + '/') for k in hashes) for name in required):
@@ -139,6 +142,9 @@ def begin_derivative(model_dir, output_dir, options):
                **runtime_provenance(),
                'source_hashes': {str(p.relative_to(Path(__file__).parent)): sha256(p) for p in Path(__file__).parent.rglob('*.py')},
                'checkpoint': parent['checkpoint'], 'options': options, 'seed': 42,
+               'parent_precision': precision,
+               'compute_precision': 'Inherited parent graph; weight compression does not lower activation/op precision',
+               'weight_storage': options.get('weight_storage'),
                'parent_output_sha256': parent['output_sha256'],
                'packages': {d.metadata['Name']: d.version for d in importlib.metadata.distributions()}}
     (output_dir / 'derivative-receipt.json').write_text(json.dumps(receipt, indent=2))
@@ -160,6 +166,13 @@ def finish_derivative(model_dir, output_dir, receipt, mlmodel):
     if not checks:
         raise ValueError('Missing derivative numerical reference outputs')
     passed = all(v['passed'] for v in checks.values())
+    metadata_path = output_dir / 'metadata.json'
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(checkpoint_sha256=receipt['checkpoint']['sha256'],
+                    parent_precision=receipt['parent_precision'],
+                    compute_precision=receipt['compute_precision'],
+                    weight_storage=receipt['weight_storage'])
+    metadata_path.write_text(json.dumps(metadata, indent=2))
     receipt.update(checks=checks, status='passed' if passed else 'numerical_check_failed')
     receipt['output_sha256'] = {str(p.relative_to(output_dir)): sha256(p) for p in output_dir.rglob('*')
                                 if p.is_file() and p.name != 'derivative-receipt.json'}

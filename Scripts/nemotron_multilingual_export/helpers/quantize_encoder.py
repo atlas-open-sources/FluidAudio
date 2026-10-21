@@ -49,6 +49,7 @@ def quantize(
         "--granularity",
         help="Quantization granularity: per_channel or per_tensor",
     ),
+    parent_precision: str = typer.Option("FLOAT16", help="Required precision of the qualified parent: FLOAT16 or FLOAT32"),
     compute_units: str = typer.Option("CPU_ONLY", help="Explicit compute units for parent and transformed model validation"),
 ) -> None:
     """Quantize the Nemotron encoder to int8."""
@@ -61,7 +62,7 @@ def quantize(
     if granularity not in {"per_channel", "per_tensor"}:
         raise ValueError("Invalid quantization granularity")
     units = getattr(ct.ComputeUnit, validate_compute_units(compute_units))
-    receipt = begin_derivative(model_dir, output_dir, {"compute_units": compute_units, "method": "int8_linear", "granularity": granularity})
+    receipt = begin_derivative(model_dir, output_dir, {"parent_precision": parent_precision, "weight_storage": "int8 weights, inherited floating compute", "compute_units": compute_units, "method": "int8_linear", "granularity": granularity})
 
     # Get baseline size
     baseline_size = _dir_size_mb(encoder_path)

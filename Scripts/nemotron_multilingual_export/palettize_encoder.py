@@ -31,6 +31,7 @@ def palettize(
     ),
     group_size: int = typer.Option(16, help="channels per LUT for per_grouped_channel"),
     per_channel_scale: bool = typer.Option(False, help="add per-channel scales to the LUT"),
+    parent_precision: str = typer.Option("FLOAT16", help="Required precision of the qualified parent: FLOAT16 or FLOAT32"),
     compute_units: str = typer.Option("CPU_ONLY", help="Explicit compute units for parent and transformed model validation"),
 ) -> None:
     encoder_path = model_dir / "encoder.mlpackage"
@@ -41,7 +42,7 @@ def palettize(
     if granularity not in {"per_tensor", "per_grouped_channel"} or group_size < 1:
         raise ValueError("Invalid granularity/group size")
     units = getattr(ct.ComputeUnit, validate_compute_units(compute_units))
-    receipt = begin_derivative(model_dir, output_dir, {"compute_units": compute_units, "nbits": nbits, "mode": mode, "granularity": granularity, "group_size": group_size, "per_channel_scale": per_channel_scale})
+    receipt = begin_derivative(model_dir, output_dir, {"parent_precision": parent_precision, "weight_storage": f"{nbits}-bit LUT indices with parent floating LUT/compute", "compute_units": compute_units, "nbits": nbits, "mode": mode, "granularity": granularity, "group_size": group_size, "per_channel_scale": per_channel_scale})
 
     baseline = _dir_size_mb(encoder_path)
     model = ct.models.MLModel(str(encoder_path), compute_units=units)

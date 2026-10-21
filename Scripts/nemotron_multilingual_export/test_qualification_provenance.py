@@ -120,3 +120,12 @@ class DerivativeGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Invalid compute units'):
             begin_derivative(self.parent, self.output, {'compute_units': 'MAGIC'})
         self.assertFalse(self.output.exists())
+
+    def test_explicit_fp32_parent_preserves_precision_in_receipt(self):
+        from qualification_provenance import begin_derivative
+        self.receipt['options']['precision'] = 'FLOAT32'
+        self.write_receipt()
+        result = begin_derivative(self.parent, self.output, {'compute_units': 'CPU_ONLY', 'parent_precision': 'FLOAT32', 'weight_storage': 'int8'})
+        self.assertEqual(result['parent_precision'], 'FLOAT32')
+        self.assertEqual(result['weight_storage'], 'int8')
+        self.assertIn('Inherited parent', result['compute_precision'])
