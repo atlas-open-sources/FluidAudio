@@ -81,6 +81,8 @@ def main():
         raise ValueError('Duplicate recordings')
     args.output.mkdir(parents=True)
     report = dict(schema_version=1, status='started', **runtime_provenance(),
+                  source_sha256={name: sha256(Path(__file__).parent / name) for name in
+                                 ['verify_streaming_rollout.py', 'individual_components.py', 'qualification_provenance.py']},
                   model_directory=str(args.model_dir.resolve()),
                   export_receipt_sha256=sha256(receipt_path),
                   source_export_status=parent['status'], checkpoint_sha256=checkpoint_sha,
@@ -129,6 +131,16 @@ def run(args, meta, report):
     }
     models = {name: ct.models.MLModel(str(args.model_dir / (name + '.mlpackage')), compute_units=ct.ComputeUnit.CPU_ONLY)
               for name in wrappers}
+    fused_path = args.model_dir / 'decoder_joint.mlpackage'
+    if fused_path.exists():
+        fused_receipt_path = args.model_dir / 'decoder-joint-receipt.json'
+        fused_receipt = json.loads(fused_receipt_path.read_text())
+        if fused_receipt['checkpoint_sha256'] != report['checkpoint_sha256']:
+            raise ValueError('Fused checkpoint mismatch')
+        verify_manifest(fused_path, {'output_sha256': fused_receipt['output_hashes']})
+        models['fused'] = ct.models.MLModel(str(fused_path), compute_units=ct.ComputeUnit.CPU_ONLY)
+        report['fused_receipt_sha256'] = sha256(fused_receipt_path)
+        report['compute_units']['fused'] = 'CPU_ONLY'
     report['load_seconds'] = time.monotonic() - started
     output_names = {'preprocessor': ['mel', 'mel_length'], 'encoder': ['encoded', 'encoded_length', 'cache_channel_out', 'cache_time_out', 'cache_len_out'],
                     'decoder': ['decoder_out', 'h_out', 'c_out'], 'joint': ['logits']}
@@ -216,6 +228,9 @@ def run(args, meta, report):
                         joint = source('joint', joint_in)
                         teacher_joint = models['joint'].predict(joint_in)
                         compare('joint_teacher_forced', joint, teacher_joint, **step)
+                        if 'fused' in models:
+                            fused = models['fused'].predict({**dec_in, 'encoder': joint_in['encoder']})
+                            compare('fused_teacher_forced', {'logits': joint['logits'], 'h_out': dec['h_out'], 'c_out': dec['c_out']}, fused, **step)
                         token = int(np.argmax(joint['logits']))
                         teacher_token = int(np.argmax(teacher_joint['logits']))
                         mismatch = token != teacher_token

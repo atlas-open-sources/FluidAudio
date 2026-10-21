@@ -20,7 +20,12 @@ def sha256(path):
 def runtime_provenance():
     source = Path(__file__).resolve().parent
     git = ['git', '-C', str(source)]
+    tracked_diff = subprocess.check_output(git + ['diff', 'HEAD', '--'])
+    untracked = subprocess.check_output(git + ['ls-files', '--others', '--exclude-standard'], text=True).splitlines()
     return {
+        'git_tracked_dirty': bool(tracked_diff),
+        'git_tracked_diff_sha256': hashlib.sha256(tracked_diff).hexdigest(),
+        'git_untracked_paths': untracked,
         'git_commit': subprocess.check_output(git + ['rev-parse', 'HEAD'], text=True).strip(),
         'git_dirty': bool(subprocess.check_output(git + ['status', '--porcelain'], text=True).strip()),
         'argv': list(sys.argv), 'python': sys.version,

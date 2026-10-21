@@ -24,7 +24,7 @@ import typer
 import nemo.collections.asr as nemo_asr
 
 from individual_components import DecoderJointWrapper
-from qualification_provenance import sha256, compare_outputs
+from qualification_provenance import sha256, compare_outputs, runtime_provenance
 
 DEFAULT_MODEL_ID = "nvidia/nemotron-3.5-asr-streaming-0.6b"
 
@@ -88,7 +88,7 @@ def export(
         blank = int(model.decoder.blank_idx)
 
     model.decoder._rnnt_export = True
-    fused = DecoderJointWrapper(model.decoder.eval(), model.joint.eval())
+    fused = DecoderJointWrapper(model.decoder.eval(), model.joint.eval()).eval()
 
     decoder_hidden = int(model.decoder.pred_hidden)
     decoder_layers = int(model.decoder.pred_rnn_layers)
@@ -129,7 +129,9 @@ def export(
     for d in dest:
         target = d / "decoder_joint.mlpackage"
         mlmodel.save(str(target))
-        evidence = {"checkpoint_sha256": checkpoint_sha256, "seed": seed, "precision": precision,
+        evidence = {**runtime_provenance(), "compute_units": "CPU_ONLY",
+                    "validation_scope": "Single real encoded frame, blank token and zero states; run verify_streaming_rollout.py for warmed state coverage",
+                    "checkpoint_sha256": checkpoint_sha256, "seed": seed, "precision": precision,
                     "parent_receipt_sha256": sha256(d / "export-receipt.json"),
                     "source_sha256": sha256(Path(__file__)), "checks": checks, "status": "passed" if passed else "failed",
                     "output_hashes": {str(p.relative_to(target)): sha256(p) for p in target.rglob("*") if p.is_file()}}
