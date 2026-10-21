@@ -119,7 +119,8 @@ enum NemotronQualificationReplay {
                 "compute_units": String(describing: options.computeUnits),
                 "model_load_seconds": modelLoadSeconds, "audio_conversion_seconds": conversionSeconds,
                 "latest_language_supported": latestLanguageSupported,
-                "first_language_semantics": "first emitted language tag, not current language",
+                "first_language_semantics":
+                    "detectedLanguage() first observation; may include soft evidence on fork; not current language",
             ], to: handle)
         let chunkSamples = options.chunkMilliseconds * 16
         let replayStart = ProcessInfo.processInfo.systemUptime
