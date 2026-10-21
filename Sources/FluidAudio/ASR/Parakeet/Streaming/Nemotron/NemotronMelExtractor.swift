@@ -39,8 +39,10 @@ struct NemotronMelExtractor {
     /// Raw (unnormalized) log-mel for one chunk of audio, shaped
     /// `[1, nMels, T]` with `T = floor((count + n_fft - win) / hop) + 1` (NeMo
     /// center padding) — the same `mel` tensor the CoreML preprocessor produced,
-    /// frame for frame. `mel_length` was ignored by the pipeline (it sets the
-    /// encoder's `mel_length` to `config.totalMelFrames`), so it is not returned.
+    /// frame for frame. NeMo masks frames beyond `floor(samples.count / hopLength)`
+    /// to zero, even though the centered transform emits an extra frame. Preserve
+    /// that mask because the streaming pipeline carries the trailing frames into
+    /// the next chunk's pre-encode history.
     func melSpectrogram(samples: [Float]) throws -> MLMultiArray {
         let result = mel.computeFlatTransposed(
             audio: samples,
@@ -50,6 +52,7 @@ struct NemotronMelExtractor {
         )
         let flat = result.mel
         let totalFrames = result.numFrames
+        let validFrames = min(samples.count / hopLength, totalFrames)
 
         let melArray = try MLMultiArray(
             shape: [1, NSNumber(value: nMels), NSNumber(value: totalFrames)], dataType: .float32)
@@ -59,7 +62,7 @@ struct NemotronMelExtractor {
             for t in 0..<totalFrames {
                 let base = t * nMels
                 for m in 0..<nMels {
-                    ptr[m * totalFrames + t] = flat[base + m]
+                    ptr[m * totalFrames + t] = t < validFrames ? flat[base + m] : 0
                 }
             }
         }

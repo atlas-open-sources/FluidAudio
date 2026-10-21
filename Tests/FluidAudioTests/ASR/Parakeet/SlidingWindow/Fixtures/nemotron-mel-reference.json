@@ -1,0 +1,38 @@
+{
+  "source_audio": "01-validation-request-21.4s.wav",
+  "source_audio_sha256": "ad9e59cad579382e742af2265280396c24c174f325e172ff5e5862a2457640d9",
+  "reference": "Real checkpoint-derived FP32 CoreML preprocessor, CPU_ONLY; no native Swift values used to generate goldens.",
+  "checkpoint_sha256": "210214ed94039bf6bfbb9a047c7fa289628db75b103e2bf6381fa78285436a74",
+  "coremltools": "9.0",
+  "model_files": {
+    "Manifest.json": "77a3a546ac44515edeee962a4f426a40de8c677c0814a27c5065369d44b05f8c",
+    "Data/com.apple.CoreML/model.mlmodel": "5d317be4cab8a30ff0bc9a298c1bf3bb78a0c2156b56879b998933d1d6ab89c7",
+    "Data/com.apple.CoreML/weights/weight.bin": "eff8082d1cc59b4aeaf963d61fa982f84e805554ede7506aed89d9dfd0d2549e"
+  },
+  "cases": [
+    {
+      "samples": 17920,
+      "sample_bytes_sha256": "c8b1345cfc5965e46b402bafd4a066dfc18cc151893d79c16b5238de540eadb6",
+      "shape": [
+        1,
+        128,
+        113
+      ],
+      "valid_frames": 112,
+      "reference_file": "nemotron-mel-reference-17920.f32",
+      "sha256": "c48bbe48fc7cbc8259d1e882e35d88c297501dd45712595995b76fa7ce8d2458"
+    },
+    {
+      "samples": 17937,
+      "sample_bytes_sha256": "6eab1b9f276d625780755645fe7f6c34fbbcb7ed46c1bb9b38129826a2c5e419",
+      "shape": [
+        1,
+        128,
+        113
+      ],
+      "valid_frames": 112,
+      "reference_file": "nemotron-mel-reference-17937.f32",
+      "sha256": "32ef8b332ba01b221efcc2be7f69fca25817a0e93af1924ebe1c48351ec978d6"
+    }
+  ]
+}
