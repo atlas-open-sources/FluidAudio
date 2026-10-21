@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""Palettize the encoder to 4-bit LUT weights (the shipped bundles' trick).
-
-Encoder energy per chunk is substantially memory traffic; halving weight
-bytes vs int8 cuts joules per chunk without touching behavior. Applied to
-the FP16 export (FP16 compute stays ANE-resident; the LUT decompresses via
-constexpr_lut_to_dense like the shipped bundles).
-"""
+"""Palettize a verified FP16 parent; measure numerical changes on real input."""
 from pathlib import Path
 import shutil
+from qualification_provenance import begin_derivative, finish_derivative
 
 import typer
 import coremltools as ct
@@ -40,7 +35,11 @@ def palettize(
     encoder_path = model_dir / "encoder.mlpackage"
     if not encoder_path.exists():
         raise typer.BadParameter(f"encoder.mlpackage not found in {model_dir}")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if nbits not in {1, 2, 3, 4, 6, 8} or mode not in {"kmeans", "uniform"}:
+        raise ValueError("Invalid palette bits or mode")
+    if granularity not in {"per_tensor", "per_grouped_channel"} or group_size < 1:
+        raise ValueError("Invalid granularity/group size")
+    receipt = begin_derivative(model_dir, output_dir, {"nbits": nbits, "mode": mode, "granularity": granularity, "group_size": group_size, "per_channel_scale": per_channel_scale})
 
     baseline = _dir_size_mb(encoder_path)
     model = ct.models.MLModel(str(encoder_path))
@@ -87,6 +86,7 @@ def palettize(
                 shutil.copytree(src, dst)
             else:
                 shutil.copy2(src, dst)
+    finish_derivative(model_dir, output_dir, receipt, palettized)
     typer.echo("Done!")
 
 

@@ -13,7 +13,6 @@ for pruned bundle dirs.
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -25,6 +24,7 @@ import typer
 import nemo.collections.asr as nemo_asr
 
 from individual_components import DecoderJointWrapper
+from qualification_provenance import sha256, compare_outputs
 
 DEFAULT_MODEL_ID = "nvidia/nemotron-3.5-asr-streaming-0.6b"
 
@@ -33,11 +33,26 @@ app = typer.Typer(add_completion=False)
 
 @app.command()
 def export(
+    checkpoint: Path = typer.Option(..., help="Pinned local .nemo checkpoint"),
+    checkpoint_sha256: str = typer.Option(..., help="Expected checkpoint SHA256"),
+    seed: int = typer.Option(42),
     dest: List[Path] = typer.Option(..., "--dest", help="Bundle dirs to receive decoder_joint.mlpackage"),
     precision: str = typer.Option("FLOAT16", help="FLOAT32 or FLOAT16"),
     prune_tokenizer: Optional[Path] = typer.Option(None, help="Reference tokenizer.json for latin-style pruning"),
 ) -> None:
-    model = nemo_asr.models.ASRModel.from_pretrained(DEFAULT_MODEL_ID, map_location="cpu")
+    if precision.upper() not in {"FLOAT16", "FLOAT32"}:
+        raise ValueError("Invalid precision")
+    if sha256(checkpoint) != checkpoint_sha256:
+        raise ValueError("Checkpoint SHA256 mismatch")
+    for d in dest:
+        receipt = json.loads((d / "export-receipt.json").read_text())
+        if receipt["checkpoint"]["sha256"] != checkpoint_sha256 or receipt["status"] != "passed":
+            raise ValueError("Destination must be a passed export of the identical checkpoint")
+        if (d / "decoder_joint.mlpackage").exists():
+            raise ValueError("Refusing to overwrite fused model")
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    model = nemo_asr.models.ASRModel.restore_from(str(checkpoint), map_location="cpu")
     model.eval()
 
     if prune_tokenizer is not None:
@@ -75,7 +90,8 @@ def export(
     token_len = torch.tensor([1], dtype=torch.int32)
     h = torch.zeros(decoder_layers, 1, decoder_hidden)
     c = torch.zeros(decoder_layers, 1, decoder_hidden)
-    enc_step = torch.randn(1, enc_dim, 1)
+    with np.load(dest[0] / "encoder-validation.npz", allow_pickle=False) as evidence:
+        enc_step = torch.from_numpy(evidence["expected_encoded"][:, :, :1].copy())
 
     traced = torch.jit.trace(fused, (token, token_len, h, c, enc_step), strict=False)
     inputs = [
@@ -100,16 +116,17 @@ def export(
         compute_precision=ct.precision.FLOAT16 if precision.upper() == "FLOAT16" else ct.precision.FLOAT32,
     )
 
-    staging = Path("decoder_joint_staging.mlpackage")
-    if staging.exists():
-        shutil.rmtree(staging)
-    mlmodel.save(str(staging))
+    checks = compare_outputs(mlmodel, fused, (token, token_len, h, c, enc_step), inputs, outputs)
+    passed = all(row["passed"] for row in checks.values())
     for d in dest:
         target = d / "decoder_joint.mlpackage"
-        if target.exists():
-            shutil.rmtree(target)
-        shutil.copytree(staging, target)
-        typer.echo(f"-> {target}")
+        mlmodel.save(str(target))
+        evidence = {"checkpoint_sha256": checkpoint_sha256, "seed": seed, "precision": precision,
+                    "checks": checks, "status": "passed" if passed else "failed",
+                    "output_hashes": {str(p.relative_to(target)): sha256(p) for p in target.rglob("*") if p.is_file()}}
+        (d / "decoder-joint-receipt.json").write_text(json.dumps(evidence, indent=2))
+    if not passed:
+        raise ValueError("Fused decoder numerical check failed")
     typer.echo("Done!")
 
 

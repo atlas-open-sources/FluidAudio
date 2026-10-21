@@ -43,8 +43,7 @@ hardcoding the 1120 ms numbers, so any supported lookahead exports correctly.
   input.
 - **Checkpoint lineage**: today's public checkpoint has left context 56
   (`att_context_size [56, N]`, channel cache `[1, 24, 56, 1024]`); the shipped
-  bundles record `[42, 13]` / cache 42 — they were built from an older
-  checkpoint that is no longer published. Bundles from this script are NOT
+  bundles record `[42, 13]` / cache 42 — their exact checkpoint lineage has not been proven by these metadata alone. Bundles from this script are NOT
   cache-compatible with the shipped ones; each bundle's `metadata.json` is the
   source of truth and the Swift side reads shapes from it.
 - **Full vocab (13,087)**: no vocab pruning. The shipped `latin/` family is
@@ -91,3 +90,26 @@ swift run -c release fluidaudiocli nemotron-multilingual-transcribe \
   fine; at runtime the encoder falls back to GPU/CPU. Not yet root-caused.
 - Punctuation sparsity at low-latency tiers on long sessions (upstream issue
   #687) presumably worsens below 560 ms — measure before shipping a default.
+
+
+## Local qualification mode
+
+This branch requires `--checkpoint /absolute/path/model.nemo`,
+`--checkpoint-sha256 <verified digest>` and `--validation-audio <real mono16k WAV>`.
+All four base components restore that local checkpoint without resolving a remote
+model name. The fused decoder requires the same hash and a passed destination
+receipt. Existing output directories are rejected; failed runs remain inspectable
+and retries need a fresh directory. Do not reuse partial bundles.
+
+The base exporter seeds Python/NumPy/Torch, records exact installed package versions,
+source hashes, arguments, input/output byte hashes, and compares each CoreML component
+with its PyTorch wrapper on real-audio-derived inputs. Integer outputs must match;
+float normalized RMSE must be at most0.05. This provisional single-input numerical
+gate is **not** an end-to-end WER, multi-chunk streaming or language-switching gate.
+Captured validation NPZ arrays are derived from the recorded real WAV.
+
+Int8 and LUT derivative scripts require an unchanged, passed FP16 parent receipt,
+verify every recorded parent file hash, and retain parent/checkpoint lineage. They
+compare the compressed encoder against the same captured real-input reference.
+No claim about quality, power or ANE placement follows merely from successful
+conversion or weight size. Benchmark matched variants on held-out human recordings.

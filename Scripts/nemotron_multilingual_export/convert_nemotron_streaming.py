@@ -10,6 +10,9 @@ Exports 4 components for streaming RNNT inference:
 from __future__ import annotations
 
 import json
+import random
+import soundfile as sf
+from qualification_provenance import begin_export, finish_export, compare_outputs
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -49,7 +52,9 @@ def _parse_cu(name: str) -> ct.ComputeUnit:
         "CPU_AND_GPU": ct.ComputeUnit.CPU_AND_GPU,
         "CPU_AND_NE": ct.ComputeUnit.CPU_AND_NE,
     }
-    return mapping.get(name.upper(), ct.ComputeUnit.CPU_ONLY)
+    if name.upper() not in mapping:
+        raise ValueError(f"Invalid compute units: {name}")
+    return mapping[name.upper()]
 
 
 app = typer.Typer(add_completion=False)
@@ -57,6 +62,10 @@ app = typer.Typer(add_completion=False)
 
 @app.command()
 def convert(
+    checkpoint: Path = typer.Option(..., help="Pinned local .nemo checkpoint; no network restore"),
+    checkpoint_sha256: str = typer.Option(..., help="Expected checkpoint SHA256"),
+    validation_audio: Path = typer.Option(..., help="Real mono 16kHz WAV used for tracing and numerical checks"),
+    seed: int = typer.Option(42),
     output_dir: Path = typer.Option(Path("nemotron_coreml"), help="Output directory"),
     encoder_cu: str = typer.Option("CPU_AND_NE", help="Encoder compute units"),
     precision: str = typer.Option("FLOAT32", help="FLOAT32 or FLOAT16"),
@@ -72,13 +81,21 @@ def convert(
     ),
 ) -> None:
     """Export Nemotron Streaming to CoreML."""
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if precision.upper() not in {"FLOAT32", "FLOAT16"}:
+        raise typer.BadParameter("precision must be FLOAT32 or FLOAT16")
+    _parse_cu(encoder_cu)
+    receipt = begin_export(output_dir, checkpoint, checkpoint_sha256, validation_audio, seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.set_num_threads(4)
+    checks = {}
 
     typer.echo("Loading model...")
     # ASRModel auto-detects the concrete class. This checkpoint is
     # EncDecRNNTBPEModelWithPrompt, NOT the unprompted class the English
     # export hardcoded.
-    model = nemo_asr.models.ASRModel.from_pretrained(DEFAULT_MODEL_ID, map_location="cpu")
+    model = nemo_asr.models.ASRModel.restore_from(str(checkpoint), map_location="cpu")
     model.eval()
 
     sample_rate = int(model.cfg.preprocessor.sample_rate)
@@ -208,8 +225,11 @@ def convert(
     # === Preprocessor ===
     typer.echo("Exporting preprocessor...")
     max_samples = 30 * sample_rate
-    audio = torch.randn(1, max_samples)
-    audio_len = torch.tensor([max_samples], dtype=torch.int32)
+    samples, rate = sf.read(validation_audio, dtype="float32")
+    if rate != sample_rate or samples.ndim != 1 or len(samples) < TOTAL_MEL_FRAMES * 160:
+        raise ValueError("Validation WAV must be mono 16kHz and at least one full chunk long")
+    audio = torch.from_numpy(samples[:max_samples].copy()).unsqueeze(0)
+    audio_len = torch.tensor([audio.shape[1]], dtype=torch.int32)
 
     traced = torch.jit.trace(preprocessor, (audio, audio_len), strict=False)
     inputs = [
@@ -222,11 +242,13 @@ def convert(
     ]
     mlmodel = _coreml_convert(traced, inputs, outputs, settings, ct.ComputeUnit.CPU_ONLY)
     mlmodel.save(str(output_dir / "preprocessor.mlpackage"))
+    checks["preprocessor"] = compare_outputs(mlmodel, preprocessor, (audio, audio_len), inputs, outputs, capture=output_dir / "preprocessor-validation.npz")
 
     # === Encoder (streaming) ===
     typer.echo("Exporting encoder...")
     mel_features = int(model.cfg.preprocessor.features)  # 128 for this model
-    mel = torch.randn(1, mel_features, TOTAL_MEL_FRAMES)
+    with torch.no_grad():
+        mel = preprocessor(audio, audio_len)[0][:, :, :TOTAL_MEL_FRAMES].contiguous()
     mel_len = torch.tensor([TOTAL_MEL_FRAMES], dtype=torch.int32)
     prompt_id_t = torch.tensor([default_prompt_id], dtype=torch.int32)
 
@@ -252,6 +274,7 @@ def convert(
     ]
     mlmodel = _coreml_convert(traced, inputs, outputs, settings, _parse_cu(encoder_cu))
     mlmodel.save(str(output_dir / "encoder.mlpackage"))
+    checks["encoder"] = compare_outputs(mlmodel, encoder_streaming, (mel, mel_len, cache_channel_b, cache_time_b, cache_len, prompt_id_t), inputs, outputs, capture=output_dir / "encoder-validation.npz")
 
     # === Decoder ===
     typer.echo("Exporting decoder...")
@@ -277,15 +300,15 @@ def convert(
     ]
     mlmodel = _coreml_convert(traced, inputs, outputs, settings, ct.ComputeUnit.CPU_ONLY)
     mlmodel.save(str(output_dir / "decoder.mlpackage"))
+    checks["decoder"] = compare_outputs(mlmodel, decoder, (targets, target_len, h, c), inputs, outputs, capture=output_dir / "decoder-validation.npz")
 
     # === Joint ===
     typer.echo("Exporting joint...")
     with torch.no_grad():
-        mel_test, _ = preprocessor(audio[:, :sample_rate], torch.tensor([sample_rate], dtype=torch.int32))
         # Run through encoder wrapper (not model.encoder directly to avoid typed method issues)
         enc_out, _, _, _, _ = encoder_streaming(
-            mel_test,
-            torch.tensor([mel_test.shape[2]], dtype=torch.int32),
+            mel,
+            mel_len,
             cache_channel_b,
             cache_time_b,
             cache_len,
@@ -305,6 +328,7 @@ def convert(
     outputs = [ct.TensorType(name="logits", dtype=np.float32)]
     mlmodel = _coreml_convert(traced, inputs, outputs, settings, ct.ComputeUnit.CPU_ONLY)
     mlmodel.save(str(output_dir / "joint.mlpackage"))
+    checks["joint"] = compare_outputs(mlmodel, joint, (enc_step, dec_step), inputs, outputs, capture=output_dir / "joint-validation.npz")
 
     # === Metadata ===
     vocab_size = vocab_size_out
@@ -358,6 +382,7 @@ def convert(
     tokenizer[str(blank_idx_out)] = "<blank>"
     (output_dir / "tokenizer.json").write_text(json.dumps(tokenizer, indent=2))
 
+    finish_export(output_dir, receipt, checks, {"precision": precision.upper(), "lookahead": lookahead, "encoder_cu": encoder_cu})
     typer.echo(f"Done! Exported to {output_dir}")
 
 

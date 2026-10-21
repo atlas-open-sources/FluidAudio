@@ -5,6 +5,9 @@ Reduces encoder from ~2.2GB to ~550MB with minimal quality loss.
 """
 from pathlib import Path
 import json
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from qualification_provenance import begin_derivative, finish_derivative
 import shutil
 
 import typer
@@ -54,7 +57,9 @@ def quantize(
         typer.echo(f"Error: encoder.mlpackage not found at {encoder_path}")
         raise typer.Exit(code=1)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if granularity not in {"per_channel", "per_tensor"}:
+        raise ValueError("Invalid quantization granularity")
+    receipt = begin_derivative(model_dir, output_dir, {"method": "int8_linear", "granularity": granularity})
 
     # Get baseline size
     baseline_size = _dir_size_mb(encoder_path)
@@ -134,6 +139,7 @@ def quantize(
             json.dump(metadata, f, indent=2)
         typer.echo("  Updated metadata.json with quantization info")
 
+    finish_derivative(model_dir, output_dir, receipt, encoder_q)
     typer.echo(f"\nDone! Quantized models saved to {output_dir}")
 
     # Print summary
