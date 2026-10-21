@@ -173,7 +173,6 @@ final class ARPALanguageModelTests: XCTestCase {
     }
 }
 
-
 extension ARPALanguageModelTests {
     func testBundledMedicalFixtureIsAccessible() throws {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "sample_medical", withExtension: "arpa"))
