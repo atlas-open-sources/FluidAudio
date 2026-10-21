@@ -129,3 +129,11 @@ class DerivativeGuardTests(unittest.TestCase):
         self.assertEqual(result['parent_precision'], 'FLOAT32')
         self.assertEqual(result['weight_storage'], 'int8')
         self.assertIn('Inherited parent', result['compute_precision'])
+
+    def test_fused_companion_must_bind_exact_parent_receipt(self):
+        import json
+        (self.parent / 'decoder_joint.mlpackage').mkdir()
+        (self.parent / 'decoder-joint-receipt.json').write_text(json.dumps({'status': 'passed', 'checkpoint_sha256': 'fixture', 'parent_receipt_sha256': 'wrong', 'output_hashes': {}}))
+        with self.assertRaisesRegex(ValueError, 'Fused parent receipt mismatch'):
+            self.begin()
+        self.assertFalse(self.output.exists())

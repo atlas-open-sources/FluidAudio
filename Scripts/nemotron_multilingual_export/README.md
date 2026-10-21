@@ -113,3 +113,46 @@ verify every recorded parent file hash, and retain parent/checkpoint lineage. Th
 compare the compressed encoder against the same captured real-input reference.
 No claim about quality, power or ANE placement follows merely from successful
 conversion or weight size. Benchmark matched variants on held-out human recordings.
+
+### Warmed-state verification and explicit weight-storage experiments
+
+`verify_streaming_rollout.py` checks complete real mono16k recordings against the
+same local checkpoint without rewriting model packages or old receipts. Supply
+`--model-dir`, `--checkpoint`, one or more `--audio` paths, and a fresh `--output`
+directory. `--prompt auto` is the default; unknown prompt names fail. Recordings
+must span at least two chunks. Use the isolated locked environment and set
+`HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 WANDB_MODE=disabled`.
+
+The verifier uses CPU_ONLY for every component and records hardware, macOS,
+source hashes, tracked Git diff hash, untracked paths, model/input hashes and
+per-step numerical checks. It follows the Swift fixed-shape chunk convention:
+zero pre-encode history on the first chunk, actual trailing mel history thereafter,
+and zero audio padding at the tail. This is explicitly not the distinct NeMo
+variable-first-chunk streaming API. Encoder checks separate teacher-forced source
+caches from independently fed-back CoreML caches and preprocessing. Source greedy
+tokens exercise nonblank decoder inputs and warmed recurrent state; joint checks
+cover all decoded frames. Independent CoreML greedy tokens must match. If a fused
+model is present, its receipt/hashes are verified and warmed fused outputs are
+also checked. Symbol-limit hits or absent nonblank/nonzero-state coverage fail.
+
+A rollout pass remains a bounded numerical/token-conformance observation, not
+multilingual WER acceptance. The 5% normalized-RMSE threshold is provisional and
+unchanged; a numerical failure must not be described as proof of WER degradation.
+Keep separate held-out human-transcript evaluations and compute-unit comparisons.
+
+Both weight compression commands accept `--parent-precision FLOAT32` explicitly
+(the default remains FLOAT16), along with `--compute-units CPU_ONLY`. The parent's
+receipt must have passed and declare exactly that precision. This allows a matched
+FP32-parent Int8/6bit storage experiment without overriding a failed FP16 gate.
+Core ML weight compression preserves the parent's floating computation graph;
+compressed weight storage and floating compute precision are separate receipt
+fields. Verify resulting MIL/compiled metadata as well as numerical outputs.
+For 6bit grouped palettes, specify `--nbits 6 --granularity per_grouped_channel
+--group-size 16`. These are experiment parameters, not quality recommendations.
+
+Preprocessor, decoder, joint, tokenizer, and optional fused decoder companions
+must remain byte-identical to their matched parent. The fused receipt must bind
+the exact parent receipt. Derivative outputs use fresh directories and retain
+failures. An artifact may be compiled for descriptive speech testing after a
+numerical failure only if its compilation receipt clearly says `compiled_only`
+and preserves the source failure; this does not change qualification status.

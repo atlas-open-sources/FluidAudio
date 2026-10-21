@@ -137,7 +137,13 @@ def begin_derivative(model_dir, output_dir, options):
         fused_receipt = json.loads((model_dir / 'decoder-joint-receipt.json').read_text())
         if fused_receipt['status'] != 'passed' or fused_receipt['checkpoint_sha256'] != parent['checkpoint']['sha256']:
             raise ValueError('Fused model lineage mismatch')
+        if fused_receipt.get('parent_receipt_sha256') != sha256(parent_path):
+            raise ValueError('Fused parent receipt mismatch')
+        if not fused_receipt.get('output_hashes'):
+            raise ValueError('Missing fused model hashes')
         for relative, expected in fused_receipt['output_hashes'].items():
+            if Path(relative).is_absolute() or '..' in Path(relative).parts:
+                raise ValueError('Unsafe fused hash path')
             if sha256(fused / relative) != expected:
                 raise ValueError('Fused model changed')
     np.random.seed(42)
@@ -152,12 +158,25 @@ def begin_derivative(model_dir, output_dir, options):
                'weight_storage': options.get('weight_storage'),
                'parent_output_sha256': parent['output_sha256'],
                'packages': {d.metadata['Name']: d.version for d in importlib.metadata.distributions()}}
+    if fused.exists():
+        receipt['fused_parent_receipt_sha256'] = sha256(model_dir / 'decoder-joint-receipt.json')
     (output_dir / 'derivative-receipt.json').write_text(json.dumps(receipt, indent=2))
     return receipt
 
 
 def finish_derivative(model_dir, output_dir, receipt, mlmodel):
     import numpy as np
+    for relative, expected in receipt['parent_output_sha256'].items():
+        if relative == 'tokenizer.json' or any(relative.startswith(name + '/') for name in ['preprocessor.mlpackage', 'decoder.mlpackage', 'joint.mlpackage']):
+            if sha256(output_dir / relative) != expected:
+                raise ValueError('Derivative companion changed: ' + relative)
+    if 'fused_parent_receipt_sha256' in receipt:
+        if sha256(output_dir / 'decoder-joint-receipt.json') != receipt['fused_parent_receipt_sha256']:
+            raise ValueError('Derivative fused receipt changed')
+        fused = json.loads((output_dir / 'decoder-joint-receipt.json').read_text())
+        for relative, expected in fused['output_hashes'].items():
+            if sha256(output_dir / 'decoder_joint.mlpackage' / relative) != expected:
+                raise ValueError('Derivative fused companion changed')
     with np.load(model_dir / 'encoder-validation.npz', allow_pickle=False) as arrays:
         inputs = {k[len('input_'):]: arrays[k] for k in arrays.files if k.startswith('input_')}
         actual = mlmodel.predict(inputs)
