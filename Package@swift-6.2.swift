@@ -65,7 +65,8 @@ let package = Package(
                 .target(name: "LuxTtsG2pResources", condition: .when(traits: ["TTS"])),
             ],
             path: "Sources/FluidAudio",
-            exclude: ["ASR/Parakeet/Unified/benchmark.md"]
+            exclude: ["ASR/Parakeet/Unified/benchmark.md"],
+            cSettings: [.define("ACCELERATE_NEW_LAPACK")]
         ),
         // Separate target so the ~1 MB G2P bundle drops out with the `TTS` trait.
         .target(
