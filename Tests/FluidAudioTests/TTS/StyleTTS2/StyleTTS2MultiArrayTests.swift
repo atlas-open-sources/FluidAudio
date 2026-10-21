@@ -56,3 +56,15 @@ final class StyleTTS2MultiArrayTests: XCTestCase {
             try StyleTTS2MultiArray.makeFloat32(values, shape: [2, 3, 4]))
     }
 }
+
+#if compiler(>=6.2)
+extension StyleTTS2MultiArrayTests {
+    @available(macOS 26, iOS 26, *)
+    func testInt8ExtractionPreservesSignedEndpoints() throws {
+        let values: [Int8] = [-128, -1, 0, 1, 127]
+        let array = try MLMultiArray(shape: [5], dataType: .int8)
+        for (index, value) in values.enumerated() { array[index] = NSNumber(value: value) }
+        XCTAssertEqual(StyleTTS2MultiArray.extractFloats(array), values.map(Float.init))
+    }
+}
+#endif

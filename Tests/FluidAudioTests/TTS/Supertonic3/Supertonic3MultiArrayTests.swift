@@ -86,3 +86,15 @@ final class Supertonic3MultiArrayTests: XCTestCase {
     }
     #endif
 }
+
+#if compiler(>=6.2)
+extension Supertonic3MultiArrayTests {
+    @available(macOS 26, iOS 26, *)
+    func testInt8ExtractionPreservesSignedEndpoints() throws {
+        let values: [Int8] = [-128, -1, 0, 1, 127]
+        let array = try MLMultiArray(shape: [5], dataType: .int8)
+        for (index, value) in values.enumerated() { array[index] = NSNumber(value: value) }
+        XCTAssertEqual(Supertonic3MultiArray.extractFloats(array), values.map(Float.init))
+    }
+}
+#endif
