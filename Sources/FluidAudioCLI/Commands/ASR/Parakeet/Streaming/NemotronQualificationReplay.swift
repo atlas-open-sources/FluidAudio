@@ -13,6 +13,7 @@ enum NemotronQualificationReplay {
         let realtime: Bool
         let language: String?
         let computeUnits: MLComputeUnits
+        let expectedLanguages: Set<String>?
 
         init(arguments: [String]) throws {
             var values: [String: String] = [:]
@@ -20,6 +21,7 @@ enum NemotronQualificationReplay {
             var index = 0
             let valuedFlags: Set<String> = [
                 "--model-dir", "--input", "--output", "--chunk-ms", "--language", "--compute-units",
+                "--expected-languages",
             ]
             while index < arguments.count {
                 let flag = arguments[index]
@@ -58,6 +60,17 @@ enum NemotronQualificationReplay {
             chunkMilliseconds = milliseconds
             self.realtime = realtime
             language = values["--language"]
+            if let allowed = values["--expected-languages"] {
+                let codes = allowed.split(separator: ",", omittingEmptySubsequences: false).map {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                guard codes.allSatisfy({ !$0.isEmpty }) else {
+                    throw ReplayError.invalidArguments("--expected-languages needs comma-separated nonempty codes")
+                }
+                expectedLanguages = Set(codes)
+            } else {
+                expectedLanguages = nil
+            }
         }
     }
 
@@ -99,6 +112,13 @@ enum NemotronQualificationReplay {
         try await manager.loadModels(from: URL(fileURLWithPath: options.modelDirectory))
         let modelLoadSeconds = ProcessInfo.processInfo.systemUptime - modelStart
         await manager.setLanguage(options.language)
+        #if QUALIFICATION_FORK
+        await manager.setExpectedLanguages(options.expectedLanguages)
+        #else
+        guard options.expectedLanguages == nil else {
+            throw ReplayError.invalidArguments("This build does not support --expected-languages")
+        }
+        #endif
         guard FileManager.default.createFile(atPath: outputURL.path, contents: nil) else {
             throw ReplayError.invalidArguments("Could not create output file")
         }
@@ -111,7 +131,7 @@ enum NemotronQualificationReplay {
         #endif
         try write(
             [
-                "event": "start", "schema_version": 1,
+                "event": "start", "schema_version": 2,
                 "mode": options.realtime ? "realtime_causal" : "offline_causal",
                 "input": options.input, "model_directory": options.modelDirectory,
                 "sample_rate": 16000, "sample_count": samples.count,
@@ -119,8 +139,10 @@ enum NemotronQualificationReplay {
                 "compute_units": String(describing: options.computeUnits),
                 "model_load_seconds": modelLoadSeconds, "audio_conversion_seconds": conversionSeconds,
                 "latest_language_supported": latestLanguageSupported,
+                "expected_languages": options.expectedLanguages.map { $0.sorted() } as Any? ?? NSNull(),
+                "language_timing_semantics": "snapshot available after chunk; not acoustic boundary",
                 "first_language_semantics":
-                    "detectedLanguage() first observation; may include soft evidence on fork; not current language",
+                    "first accepted decoder-emitted language tag; excludes soft estimates and forced prompts",
             ], to: handle)
         let chunkSamples = options.chunkMilliseconds * 16
         let replayStart = ProcessInfo.processInfo.systemUptime
@@ -166,10 +188,20 @@ enum NemotronQualificationReplay {
         let first = await manager.detectedLanguage()
         #if QUALIFICATION_FORK
         let latest = await manager.currentDetectedLanguage()
+        let observation = await manager.languageObservation()
+        let languageObservation: [String: Any] = [
+            "decoded_first": observation.decodedFirst as Any? ?? NSNull(),
+            "decoded_latest": observation.decodedLatest as Any? ?? NSNull(),
+            "inferred": observation.inferred as Any? ?? NSNull(),
+            "source": observation.source, "capability": observation.capability,
+            "path": observation.path as Any? ?? NSNull(),
+        ]
         #else
         let latest: String? = nil
+        let languageObservation: [String: Any] = ["capability": "unavailable_build", "source": "none"]
         #endif
         return [
+            "language_observation": languageObservation,
             "first_detected_language": first as Any? ?? NSNull(),
             "latest_detected_language": latest as Any? ?? NSNull(),
         ]

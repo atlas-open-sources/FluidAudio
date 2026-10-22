@@ -41,6 +41,17 @@ final class NemotronQualificationReplayTests: XCTestCase {
             try NemotronQualificationReplay.Options(arguments: required + ["--compute-units", "unknown"]))
     }
 
+    func testExpectedLanguageAllowlist() throws {
+        let options = try NemotronQualificationReplay.Options(
+            arguments: required + ["--expected-languages", "eng, nl-NL"])
+        XCTAssertEqual(options.expectedLanguages, ["eng", "nl-NL"])
+        for value in ["", "en,", ",nl", "en, ,nl"] {
+            XCTAssertThrowsError(
+                try NemotronQualificationReplay.Options(
+                    arguments: required + ["--expected-languages", value]))
+        }
+    }
+
     func testRequiresWavInput() {
         XCTAssertThrowsError(
             try NemotronQualificationReplay.Options(
