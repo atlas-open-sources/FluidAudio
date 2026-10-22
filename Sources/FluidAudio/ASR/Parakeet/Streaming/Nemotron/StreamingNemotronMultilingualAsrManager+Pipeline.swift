@@ -427,6 +427,7 @@ extension StreamingNemotronMultilingualAsrManager {
                     hOut = fh
                     cOut = fc
                 } else if let dja = decoderJointArgmax, !vocabularyBiasPrefersLogits {
+                    recordArgmaxOnlyLanguageCapability()
                     // Triple-fused path: token + h + c + encoder → token_id (int32) + h + c.
                     // Hotword biasing cannot reach this branch — the argmax is
                     // fused inside the CoreML model and no logits come out —

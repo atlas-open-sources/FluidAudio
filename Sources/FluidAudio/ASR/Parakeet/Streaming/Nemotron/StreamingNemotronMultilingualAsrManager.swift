@@ -828,6 +828,9 @@ public actor StreamingNemotronMultilingualAsrManager {
         firstDetectedLanguage = nil
         vocabularyBias?.resetMatchState()
         currentDetectedLanguageValue = nil
+        inferredLanguageValue = nil
+        languageObservationCapability = "not_observed"
+        languageObservationPath = nil
         softLanguageEvidence.reset()
         do {
             try resetStates()
@@ -885,8 +888,7 @@ public actor StreamingNemotronMultilingualAsrManager {
         self.hState = hOut
         self.cState = cOut
         self.lastToken = Int32(langTagId)
-        // Mirror what the pipeline would do when it observes a lang-tag token.
-        recordDetectedLanguage(language)
+        // A user-selected prefix is conditioning, not an observed decoder language.
         logger.info("Forced prefix: seeded decoder with lang-tag token id \(langTagId) for \(language)")
     }
 
@@ -1051,12 +1053,9 @@ public actor StreamingNemotronMultilingualAsrManager {
         try await finalizeRescueSpanIfNeeded()
 
         let decoded = tokenizer.decode(ids: accumulatedTokenIds)
-        if firstDetectedLanguage == nil {
-            firstDetectedLanguage = decoded.detectedLanguage
-        }
         // Capture diagnostic stats before we clear state.
         lastFinishTokenCount = accumulatedTokenIds.count
-        lastFinishDetectedLanguage = firstDetectedLanguage ?? decoded.detectedLanguage
+        lastFinishDetectedLanguage = firstDetectedLanguage
         lastFinishProcessedChunks = processedChunks
         // Snapshot timings before clearing so finishWithTokenTimings() can return
         // them; clear the working buffers atomically with the ids.
@@ -1103,9 +1102,6 @@ public actor StreamingNemotronMultilingualAsrManager {
     public func getPartialTranscript() -> String {
         guard let tokenizer = tokenizer else { return "" }
         let decoded = tokenizer.decode(ids: accumulatedTokenIds)
-        if firstDetectedLanguage == nil {
-            firstDetectedLanguage = decoded.detectedLanguage
-        }
         return decoded.text
     }
 
@@ -1155,6 +1151,22 @@ public actor StreamingNemotronMultilingualAsrManager {
     }
 
     private var currentDetectedLanguageValue: String?
+    private var inferredLanguageValue: String?
+    private var languageObservationCapability = "not_observed"
+    private var languageObservationPath: String?
+
+    /// A provisional logit estimate, independent of decoder-emitted language tags.
+    /// Nil until the evidence threshold is reached; this is not calibrated confidence.
+    public func inferredLanguage() -> String? { inferredLanguageValue }
+
+    /// Atomic snapshot for replay/UI consumers. Timing belongs to the caller's
+    /// audio delivery clock; this snapshot does not claim an acoustic boundary.
+    public func languageObservation() -> NemotronLanguageObservation {
+        NemotronLanguageObservation(
+            decodedFirst: firstDetectedLanguage, decodedLatest: currentDetectedLanguageValue,
+            inferred: inferredLanguageValue, capability: languageObservationCapability,
+            path: languageObservationPath)
+    }
 
     /// Optional allowlist of expected PRIMARY language subtags (e.g. `["en","es"]`)
     /// for the session. When set, any detected language outside it is ignored by
@@ -1165,7 +1177,8 @@ public actor StreamingNemotronMultilingualAsrManager {
 
     /// Set (or clear, with `nil`/empty) the expected-language allowlist. Values
     /// are normalized to primary subtags, so `"en-US"`, `"en"` and `"eng"` all
-    /// constrain to English.
+    /// constrain to English. Supported ISO 639-2 aliases: eng, nld/dut, spa,
+    /// fra/fre, deu/ger, zho/chi, jpn, kor. Other primary subtags are preserved.
     public func setExpectedLanguages(_ languages: Set<String>?) {
         guard let languages, !languages.isEmpty else {
             expectedPrimaryLanguages = nil
@@ -1175,9 +1188,9 @@ public actor StreamingNemotronMultilingualAsrManager {
     }
 
     /// The MOST RECENT language-tag piece (e.g. `"es-419"`) emitted by the decoder
-    /// this session, vs `detectedLanguage()` which is the FIRST. Because the model
-    /// re-detects language mid-stream, comparing this to the turn's opening
-    /// language is a precise, model-native signal for a speaker language switch.
+    /// this session, vs `detectedLanguage()` which is the FIRST. Both respect the
+    /// expected-language allowlist. Neither includes inferred logits or forced prompts.
+    /// Tags can be delayed or incorrect; they are not speaker or switch-boundary labels.
     public func currentDetectedLanguage() -> String? { currentDetectedLanguageValue }
 
     // MARK: - Soft (early) language detection
@@ -1205,7 +1218,14 @@ public actor StreamingNemotronMultilingualAsrManager {
 
     private static func primarySubtag(_ code: String) -> String {
         let normalized = code.replacingOccurrences(of: "_", with: "-")
-        return normalized.split(separator: "-").first.map { $0.lowercased() } ?? normalized.lowercased()
+        let primary = normalized.split(separator: "-").first.map { $0.lowercased() } ?? normalized.lowercased()
+        // Explicit ISO 639-2 aliases for the supported benchmark languages, not a
+        // heuristic conversion of arbitrary three-letter strings.
+        let aliases = [
+            "eng": "en", "nld": "nl", "dut": "nl", "spa": "es", "fra": "fr", "fre": "fr",
+            "deu": "de", "ger": "de", "zho": "zh", "chi": "zh", "jpn": "ja", "kor": "ko",
+        ]
+        return aliases[primary] ?? primary
     }
 
     private func langTagIdToLanguage(_ tokenizer: NemotronMultilingualTokenizer) -> [Int: String] {
@@ -1220,74 +1240,45 @@ public actor StreamingNemotronMultilingualAsrManager {
         return map
     }
 
-    /// Read the model's language BELIEF from a decode step's logits — the argmax
-    /// over JUST the lang-tag tokens, softmax-gated and debounced — and record it
-    /// as the current language. Unlike `recordDetectedLanguage`, which fires only
-    /// when a lang-tag token wins the FULL-vocab argmax (rare, and only near a
-    /// segment's end), this surfaces the language from the first frames of speech:
-    /// the model's relative preference *among the lang tags* is present in the
-    /// logits long before it actually emits the tag token.
-    ///
-    /// Confidence is computed on PRIMARY-subtag mass (so "en-US"/"en"/"en-GB"
-    /// reinforce each other instead of splitting the vote). `logits` is one
-    /// decode step's full-vocab logits (flat, index == token id, float32 — the
-    /// same layout `findMaxIndex` assumes). No-op for a fused argmax-only path
-    /// (no logits) or non-float32 logits.
+    /// Read provisional language evidence from a single vocabulary vector.
+    /// Supports float16/float32 and strided singleton-leading layouts.
     internal func recordSoftLanguage(
         fromLogits logits: MLMultiArray, tokenizer: NemotronMultilingualTokenizer
     ) {
-        let map = langTagIdToLanguage(tokenizer)
-        guard !map.isEmpty, logits.dataType == .float32 else { return }
-        let count = logits.count
-        let ptr = logits.dataPointer.bindMemory(to: Float.self, capacity: count)
-
-        var candidates: [(piece: String, logit: Float)] = []
-        candidates.reserveCapacity(map.count)
-        for (id, piece) in map where id < count {
-            candidates.append((piece, ptr[id]))
-        }
-        var frameMax = -Float.infinity
-        vDSP_maxv(ptr, 1, &frameMax, vDSP_Length(count))
-        applySoftLanguage(candidates: candidates, frameMaxLogit: frameMax)
+        recordSoftLanguageReading(logits, frame: nil, tokenizer: tokenizer)
     }
 
-    /// Same soft reading, but for one frame of a batched `[1, K, 1, V]` logits
-    /// array (the smart-speculative path's layout) — handles fp16/fp32 and
-    /// arbitrary strides. `frame` is the index along the K axis. Without this the
-    /// speculative path (used by model exports that ship
-    /// `joint_noencproj_batched`) would never surface the early soft language.
+    /// Read one frame from speculative logits shaped [1, K, 1, V].
     internal func recordSoftLanguage(
         fromBatchedLogits logits: MLMultiArray, frame: Int,
         tokenizer: NemotronMultilingualTokenizer
     ) {
-        let map = langTagIdToLanguage(tokenizer)
-        guard !map.isEmpty else { return }
-        let vocab = logits.shape[3].intValue
-        let stride0 = logits.strides[0].intValue
-        let stride1 = logits.strides[1].intValue
-        let stride2 = logits.strides[2].intValue
-        let stride3 = logits.strides[3].intValue
-        let base = 0 * stride0 + frame * stride1 + 0 * stride2
-        let isF16 = (logits.dataType == .float16)
-        let f16 =
-            isF16 ? logits.dataPointer.bindMemory(to: UInt16.self, capacity: logits.count) : nil
-        let f32 =
-            isF16 ? nil : logits.dataPointer.bindMemory(to: Float.self, capacity: logits.count)
+        recordSoftLanguageReading(logits, frame: frame, tokenizer: tokenizer)
+    }
 
-        var candidates: [(piece: String, logit: Float)] = []
-        candidates.reserveCapacity(map.count)
-        for (id, piece) in map where id < vocab {
-            let value =
-                isF16 ? nemotronHalfBitsToFloat(f16![base + id * stride3]) : f32![base + id * stride3]
-            candidates.append((piece, value))
+    private func recordSoftLanguageReading(
+        _ logits: MLMultiArray, frame: Int?, tokenizer: NemotronMultilingualTokenizer
+    ) {
+        guard !inBlankRescue else { return }
+        languageObservationPath = frame == nil ? "ordinary_logits" : "speculative_logits"
+        let map = langTagIdToLanguage(tokenizer)
+        guard !map.isEmpty else {
+            languageObservationCapability = "unavailable_no_language_tags"
+            return
         }
-        var frameMax = -Float.infinity
-        for id in 0..<vocab {
-            let value =
-                isF16 ? nemotronHalfBitsToFloat(f16![base + id * stride3]) : f32![base + id * stride3]
-            if value > frameMax { frameMax = value }
+        guard let reading = NemotronLanguageLogits.read(logits, frame: frame, languages: map) else {
+            languageObservationCapability = "unsupported_tensor"
+            return
         }
-        applySoftLanguage(candidates: candidates, frameMaxLogit: frameMax)
+        languageObservationCapability = "available"
+        applySoftLanguage(candidates: reading.candidates, frameMaxLogit: reading.maximum)
+    }
+
+    /// Called only when a live decode uses an argmax-only export: no logits exist.
+    internal func recordArgmaxOnlyLanguageCapability() {
+        guard !inBlankRescue else { return }
+        languageObservationCapability = "unavailable_argmax_only"
+        languageObservationPath = "fused_argmax"
     }
 
     /// Shared tail of both soft readers: read the frame (range gate + allowlist),
@@ -1303,8 +1294,7 @@ public actor StreamingNemotronMultilingualAsrManager {
             let primary = softLanguageEvidence.observe(frame.distribution)
         else { return }
         let piece = frame.bestPiece[primary] ?? primary
-        if firstDetectedLanguage == nil { firstDetectedLanguage = piece }
-        currentDetectedLanguageValue = piece
+        inferredLanguageValue = piece
     }
 
     /// One decode step's language reading, pure so it is testable without a
