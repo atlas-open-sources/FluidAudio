@@ -61,6 +61,50 @@ final class NemotronLanguageObservationTests: XCTestCase {
         XCTAssertNil(snapshot.inferred)
     }
 
+    func testSpeculativeDrainPreservesExistingObservation() async {
+        let manager = StreamingNemotronMultilingualAsrManager()
+        for _ in 0..<20 {
+            await manager.applySoftLanguage(candidates: [("nl-NL", 0)], frameMaxLogit: 0)
+        }
+        let before = await manager.languageObservation()
+        await manager.recordArgmaxOnlyLanguageCapability(isSpeculativeDrain: true)
+        let after = await manager.languageObservation()
+        XCTAssertEqual(after, before)
+        // A truly argmax-only ordinary path must still report unavailable.
+        await manager.recordArgmaxOnlyLanguageCapability()
+        let ordinary = await manager.languageObservation()
+        XCTAssertEqual(ordinary.capability, "unavailable_argmax_only")
+    }
+
+    func testExpectedLanguageInventoryRejectsUnknownAndAcceptsMandarinAliases() async {
+        let unsupported = StreamingNemotronMultilingualAsrManager.unsupportedExpectedLanguages(
+            ["cmn", "zho", "zh-CN", "eng", "nld", "engg"], supported: ["zh-CN", "en-US", "nl-NL"])
+        XCTAssertEqual(unsupported, ["engg"])
+        let manager = StreamingNemotronMultilingualAsrManager()
+        let unloaded = await manager.unsupportedExpectedLanguages(["en"])
+        XCTAssertEqual(unloaded, ["en"])
+    }
+
+    func testNegativeInfinityMaskingAndNumericFailures() throws {
+        for dtype in [MLMultiArrayDataType.float16, .float32] {
+            let logits = try MLMultiArray(shape: [4], dataType: dtype)
+            logits[0] = NSNumber(value: -Float.infinity)
+            logits[1] = -3
+            logits[2] = -1
+            logits[3] = NSNumber(value: -Float.infinity)
+            let result = try NemotronLanguageLogits.readResult(logits, frame: nil, languages: [0: "nl", 1: "en"]).get()
+            XCTAssertEqual(result.maximum, -1)
+            XCTAssertEqual(result.candidates.first?.logit, -Float.infinity)
+            for bad in [Float.nan, Float.infinity] {
+                logits[2] = NSNumber(value: bad)
+                switch NemotronLanguageLogits.readResult(logits, frame: nil, languages: [:]) {
+                case .failure(let failure): XCTAssertEqual(failure, .invalidNumeric)
+                case .success: XCTFail("NaN/+inf must be reported as invalid numeric, not unsupported layout")
+                }
+            }
+        }
+    }
+
     func testReadersAgreeAcrossFloatTypesAndStrides() throws {
         // Exactly representable tensor fixtures, not mocked model outputs.
         for dtype in [MLMultiArrayDataType.float16, .float32] {

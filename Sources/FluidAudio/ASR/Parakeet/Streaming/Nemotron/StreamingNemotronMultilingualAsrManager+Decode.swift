@@ -365,7 +365,9 @@ extension StreamingNemotronMultilingualAsrManager {
                         newH = djneH
                         newC = djneC
                     } else if let dja = self.decoderJointArgmax, !vocabularyBiasPrefersLogits {
-                        recordArgmaxOnlyLanguageCapability()
+                        // The speculative window already supplied logits for this frame.
+                        // Its follow-up argmax drain does not erase that observation.
+                        recordArgmaxOnlyLanguageCapability(isSpeculativeDrain: true)
                         // No logits out of the fused-argmax model, so an active
                         // vocabulary routes this drain to a logits path instead
                         // (same as the inner loop's B2 branch).

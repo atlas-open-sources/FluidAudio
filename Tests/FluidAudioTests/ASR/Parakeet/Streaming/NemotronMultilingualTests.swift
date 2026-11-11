@@ -619,7 +619,13 @@ extension NemotronMultilingualTests {
         let manager = StreamingNemotronMultilingualAsrManager()
         await manager.recordDetectedLanguage("en-US")
         await manager.recordDetectedLanguage("es-419")
+        for _ in 0..<20 {
+            await manager.applySoftLanguage(candidates: [("es-419", 0), ("en-US", -20)], frameMaxLogit: 0)
+        }
+        let beforeRescue = await manager.languageObservation()
         await manager.exerciseRescueLanguageUpdates()
+        let afterRescue = await manager.languageObservation()
+        XCTAssertEqual(afterRescue, beforeRescue, "Rescue cannot mutate inferred language, capability, or path")
         let first = await manager.detectedLanguage()
         let current = await manager.currentDetectedLanguage()
         XCTAssertEqual(first, "en-US")
@@ -637,6 +643,10 @@ extension NemotronMultilingualTests {
         let current = await manager.currentDetectedLanguage()
         XCTAssertNil(first)
         XCTAssertNil(current)
+        let snapshot = await manager.languageObservation()
+        XCTAssertNil(snapshot.inferred)
+        XCTAssertEqual(snapshot.capability, "not_observed")
+        XCTAssertNil(snapshot.path)
     }
 }
 
@@ -644,6 +654,7 @@ extension StreamingNemotronMultilingualAsrManager {
     fileprivate func exerciseRescueLanguageUpdates() {
         inBlankRescue = true
         defer { inBlankRescue = false }
+        recordArgmaxOnlyLanguageCapability()
         recordDetectedLanguage("en-US")
         for _ in 0..<20 {
             applySoftLanguage(candidates: [("en-US", 0), ("es-419", -20)], frameMaxLogit: 0)

@@ -1178,13 +1178,26 @@ public actor StreamingNemotronMultilingualAsrManager {
     /// Set (or clear, with `nil`/empty) the expected-language allowlist. Values
     /// are normalized to primary subtags, so `"en-US"`, `"en"` and `"eng"` all
     /// constrain to English. Supported ISO 639-2 aliases: eng, nld/dut, spa,
-    /// fra/fre, deu/ger, zho/chi, jpn, kor. Other primary subtags are preserved.
+    /// fra/fre, deu/ger, zho/chi/cmn, jpn, kor. Other primary subtags are preserved.
     public func setExpectedLanguages(_ languages: Set<String>?) {
         guard let languages, !languages.isEmpty else {
             expectedPrimaryLanguages = nil
             return
         }
         expectedPrimaryLanguages = Set(languages.map(Self.primarySubtag))
+    }
+
+    /// Validate an expected-language list against the loaded model's actual tag
+    /// inventory. Call after loadModels; an unloaded model accepts no codes.
+    public func unsupportedExpectedLanguages(_ languages: Set<String>) -> Set<String> {
+        guard let tokenizer else { return languages }
+        let supported = Set(langTagIdToLanguage(tokenizer).values.map(Self.primarySubtag))
+        return Self.unsupportedExpectedLanguages(languages, supported: supported)
+    }
+
+    static func unsupportedExpectedLanguages(_ languages: Set<String>, supported: Set<String>) -> Set<String> {
+        let normalized = Set(supported.map(primarySubtag))
+        return Set(languages.filter { !normalized.contains(primarySubtag($0)) })
     }
 
     /// The MOST RECENT language-tag piece (e.g. `"es-419"`) emitted by the decoder
@@ -1223,7 +1236,7 @@ public actor StreamingNemotronMultilingualAsrManager {
         // heuristic conversion of arbitrary three-letter strings.
         let aliases = [
             "eng": "en", "nld": "nl", "dut": "nl", "spa": "es", "fra": "fr", "fre": "fr",
-            "deu": "de", "ger": "de", "zho": "zh", "chi": "zh", "jpn": "ja", "kor": "ko",
+            "deu": "de", "ger": "de", "zho": "zh", "chi": "zh", "cmn": "zh", "jpn": "ja", "kor": "ko",
         ]
         return aliases[primary] ?? primary
     }
@@ -1266,17 +1279,24 @@ public actor StreamingNemotronMultilingualAsrManager {
             languageObservationCapability = "unavailable_no_language_tags"
             return
         }
-        guard let reading = NemotronLanguageLogits.read(logits, frame: frame, languages: map) else {
+        switch NemotronLanguageLogits.readResult(logits, frame: frame, languages: map) {
+        case .success(let reading):
+            guard !reading.candidates.isEmpty else {
+                languageObservationCapability = "unavailable_no_language_tags"
+                return
+            }
+            languageObservationCapability = "available"
+            applySoftLanguage(candidates: reading.candidates, frameMaxLogit: reading.maximum)
+        case .failure(.unsupportedLayout):
             languageObservationCapability = "unsupported_tensor"
-            return
+        case .failure(.invalidNumeric):
+            languageObservationCapability = "invalid_numeric"
         }
-        languageObservationCapability = "available"
-        applySoftLanguage(candidates: reading.candidates, frameMaxLogit: reading.maximum)
     }
 
     /// Called only when a live decode uses an argmax-only export: no logits exist.
-    internal func recordArgmaxOnlyLanguageCapability() {
-        guard !inBlankRescue else { return }
+    internal func recordArgmaxOnlyLanguageCapability(isSpeculativeDrain: Bool = false) {
+        guard !inBlankRescue, !isSpeculativeDrain else { return }
         languageObservationCapability = "unavailable_argmax_only"
         languageObservationPath = "fused_argmax"
     }

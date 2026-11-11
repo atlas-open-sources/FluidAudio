@@ -113,6 +113,13 @@ enum NemotronQualificationReplay {
         let modelLoadSeconds = ProcessInfo.processInfo.systemUptime - modelStart
         await manager.setLanguage(options.language)
         #if QUALIFICATION_FORK
+        if let expected = options.expectedLanguages {
+            let unsupported = await manager.unsupportedExpectedLanguages(expected)
+            guard unsupported.isEmpty else {
+                throw ReplayError.invalidArguments(
+                    "Expected languages have no matching model tag: \(unsupported.sorted().joined(separator: ", "))")
+            }
+        }
         await manager.setExpectedLanguages(options.expectedLanguages)
         #else
         guard options.expectedLanguages == nil else {
