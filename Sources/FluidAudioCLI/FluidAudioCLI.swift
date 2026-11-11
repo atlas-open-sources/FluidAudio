@@ -80,6 +80,8 @@ struct FluidAudioCLI {
             await NemotronTranscribe.run(arguments: Array(arguments.dropFirst(2)))
         case "nemotron-multilingual-transcribe":
             await NemotronMultilingualTranscribe.run(arguments: Array(arguments.dropFirst(2)))
+        case "nemotron-qualification-replay":
+            await NemotronQualificationReplay.runCLI(arguments: Array(arguments.dropFirst(2)))
         case "nemotron-multilingual-benchmark":
             await NemotronMultilingualFleursBenchmark.runCLI(arguments: Array(arguments.dropFirst(2)))
         case "nemotron-multilingual-multi-stream-bench":

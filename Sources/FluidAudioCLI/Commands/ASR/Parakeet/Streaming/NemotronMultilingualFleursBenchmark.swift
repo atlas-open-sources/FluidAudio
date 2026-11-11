@@ -4,6 +4,27 @@ import CoreML
 import FluidAudio
 import Foundation
 
+/// Accumulates edit counts without giving short utterances disproportionate weight.
+struct NemotronBenchmarkErrorRate {
+    private(set) var errors = 0
+    private(set) var referenceUnits = 0
+
+    mutating func add(errors: Int, referenceUnits: Int) throws {
+        guard errors >= 0, referenceUnits > 0 else {
+            throw ASRError.processingFailed("Invalid benchmark edit count or empty normalized reference")
+        }
+        self.errors += errors
+        self.referenceUnits += referenceUnits
+    }
+
+    func rate() throws -> Double {
+        guard referenceUnits > 0 else {
+            throw ASRError.processingFailed("Benchmark contains no scored reference units")
+        }
+        return Double(errors) / Double(referenceUnits)
+    }
+}
+
 /// FLEURS multilingual benchmark for the Nemotron Speech Streaming Multilingual
 /// 0.6B model. Reuses `FLEURSBenchmark`'s dataset download / cache layout so the
 /// same `~/Library/Application Support/FluidAudio/FLEURS/<lang>/` directories
@@ -64,6 +85,10 @@ public class NemotronMultilingualFleursBenchmark {
         public let samplesSkipped: Int
         public let totalDuration: Double
         public let processingTime: Double
+        public let scoringMetric: String
+        public let corpusErrorRate: Double
+        public let errorCount: Int
+        public let referenceUnitCount: Int
     }
 
     private let config: Config
@@ -144,9 +169,13 @@ public class NemotronMultilingualFleursBenchmark {
                 samplesPerLanguage: config.samplesPerLanguage
             )
         }
-        if samples.isEmpty {
-            logger.warning("No samples loaded. Aborting.")
-            return []
+        guard !samples.isEmpty else {
+            throw ASRError.processingFailed("No benchmark samples loaded")
+        }
+        for sample in samples {
+            guard !sample.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ASRError.processingFailed("Missing reference for \(sample.sampleId)")
+            }
         }
 
         logger.info("Loaded \(samples.count) samples across \(config.languages.count) languages")
@@ -170,8 +199,10 @@ public class NemotronMultilingualFleursBenchmark {
         var dumpHandle: FileHandle?
         if let dumpPath = config.dumpSamplesPath {
             let url = URL(fileURLWithPath: dumpPath)
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-            dumpHandle = try? FileHandle(forWritingTo: url)
+            guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+                throw ASRError.processingFailed("Cannot create per-sample dump")
+            }
+            dumpHandle = try FileHandle(forWritingTo: url)
             logger.info("Per-sample dump: \(url.path)")
         }
         defer { try? dumpHandle?.close() }
@@ -180,7 +211,9 @@ public class NemotronMultilingualFleursBenchmark {
         let groups = Dictionary(grouping: samples, by: { $0.language })
         // Preserve user-specified language order in output.
         for lang in config.languages {
-            guard let langSamples = groups[lang] else { continue }
+            guard let langSamples = groups[lang], !langSamples.isEmpty else {
+                throw ASRError.processingFailed("No samples for requested language \(lang)")
+            }
             let promptLang = config.promptOverride ?? Self.fleursToMultilingualLanguage(lang)
             await manager.setLanguage(promptLang)
             await manager.reset()
@@ -216,6 +249,8 @@ public class NemotronMultilingualFleursBenchmark {
         var totalProcessingTime = 0.0
         var processed = 0
         var skipped = 0
+        var corpus = NemotronBenchmarkErrorRate()
+        let scoringMetric = WERCalculator.isCJKLanguage(language) ? "cer" : "wer"
 
         let audioConverter = AudioConverter()
 
@@ -244,10 +279,13 @@ public class NemotronMultilingualFleursBenchmark {
                 // second `resampleBuffer` resample inside
                 // `process(audioBuffer:)`. Isolates model wall-time from
                 // file-IO/resample harness overhead.
-                let startTime = Date()
+                let startTime = ProcessInfo.processInfo.systemUptime
                 _ = try await manager.process(samples: audioSamples)
                 let hypothesis = try await manager.finish()
-                let processingTime = Date().timeIntervalSince(startTime)
+                let processingTime = ProcessInfo.processInfo.systemUptime - startTime
+                guard processingTime.isFinite, processingTime > 0, audioDuration > 0 else {
+                    throw ASRError.processingFailed("Invalid benchmark timing or empty audio for \(sample.sampleId)")
+                }
                 // Capture diagnostic stats from this finish() call before any
                 // subsequent reset() clears them.
                 let decodeStats = await manager.lastDecodeStats()
@@ -295,6 +333,10 @@ public class NemotronMultilingualFleursBenchmark {
                             spellOutLocale: locale
                         )
                     }
+                    try corpus.add(
+                        errors: metrics.insertions + metrics.deletions + metrics.substitutions,
+                        referenceUnits: metrics.totalWords
+                    )
                     totalWER += metrics.wer
                     totalCER += metrics.cer
 
@@ -319,6 +361,13 @@ public class NemotronMultilingualFleursBenchmark {
                         )
                         let row: [String: Any] = [
                             "sampleId": sample.sampleId,
+                            "status": "ok",
+                            "processing_seconds": processingTime,
+                            "selected_metric": scoringMetric,
+                            "error_rate": metrics.wer,
+                            "selected_errors": metrics.insertions + metrics.deletions + metrics.substitutions,
+                            "selected_reference_units": metrics.totalWords,
+                            "cer": metrics.cer,
                             "language": language,
                             "audio_duration": audioDuration,
                             "accumulated_token_count": decodeStats.tokenCount,
@@ -347,10 +396,9 @@ public class NemotronMultilingualFleursBenchmark {
                             "del_basic_itn": basicItnMetrics.deletions,
                             "sub_basic_itn": basicItnMetrics.substitutions,
                         ]
-                        if let data = try? JSONSerialization.data(withJSONObject: row, options: []) {
-                            handle.write(data)
-                            handle.write(Data([0x0A]))  // newline
-                        }
+                        let data = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
+                        try handle.write(contentsOf: data)
+                        try handle.write(contentsOf: Data([0x0A]))
                     }
                 }
 
@@ -378,8 +426,10 @@ public class NemotronMultilingualFleursBenchmark {
             }
         }
 
-        guard processed > 0 else {
-            throw ASRError.processingFailed("Benchmark failed for \(language): no samples processed")
+        guard processed > 0, skipped == 0 else {
+            throw ASRError.processingFailed(
+                "Incomplete benchmark for \(language): \(processed) processed, \(skipped) skipped"
+            )
         }
 
         let avgWER = totalWER / Double(processed)
@@ -395,7 +445,11 @@ public class NemotronMultilingualFleursBenchmark {
             samplesProcessed: processed,
             samplesSkipped: skipped,
             totalDuration: totalDuration,
-            processingTime: totalProcessingTime
+            processingTime: totalProcessingTime,
+            scoringMetric: scoringMetric,
+            corpusErrorRate: try corpus.rate(),
+            errorCount: corpus.errors,
+            referenceUnitCount: corpus.referenceUnits
         )
     }
 
@@ -525,6 +579,8 @@ public class NemotronMultilingualFleursBenchmark {
             value.isNaN || value.isInfinite ? 0.0 : value
         }
         let output: [String: Any] = [
+            "schemaVersion": 2,
+            "legacyRateAggregation": "utterance_macro; wer uses cer for CJK",
             "benchmark": "Nemotron Multilingual \(config.dataset.rawValue.uppercased())",
             "dataset": config.dataset.rawValue,
             "timestamp": ISO8601DateFormatter().string(from: Date()),
@@ -537,6 +593,10 @@ public class NemotronMultilingualFleursBenchmark {
             "results": results.map { r in
                 [
                     "language": r.language,
+                    "scoringMetric": r.scoringMetric,
+                    "corpusErrorRate": r.corpusErrorRate,
+                    "errorCount": r.errorCount,
+                    "referenceUnitCount": r.referenceUnitCount,
                     "promptLanguageCode": r.promptLanguageCode,
                     "wer": sanitize(r.wer),
                     "cer": sanitize(r.cer),
@@ -784,13 +844,14 @@ extension NemotronMultilingualFleursBenchmark {
             try benchmark.saveResults(results, to: resolvedOutput)
             logger.info("Results saved to \(resolvedOutput)")
 
-            // Print summary table
+            // Preserve the legacy macro columns while labeling their aggregation explicitly.
+            print("Macro%*: utterance-average WER, or CER for CJK. Corpus-weighted rates are in JSON.")
             print("")
             print(
                 [
                     "Language".padding(toLength: 12, withPad: " ", startingAt: 0),
                     "Prompt".padding(toLength: 8, withPad: " ", startingAt: 0),
-                    "WER%".padding(toLength: 6, withPad: " ", startingAt: 0),
+                    "Macro%*".padding(toLength: 6, withPad: " ", startingAt: 0),
                     "CER%".padding(toLength: 6, withPad: " ", startingAt: 0),
                     "RTFx".padding(toLength: 6, withPad: " ", startingAt: 0),
                     "Duration".padding(toLength: 9, withPad: " ", startingAt: 0),
