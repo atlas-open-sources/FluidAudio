@@ -92,6 +92,8 @@ struct FluidAudioCLI {
             await NemotronTranscribe.run(arguments: Array(arguments.dropFirst(2)))
         case "nemotron-multilingual-transcribe":
             await NemotronMultilingualTranscribe.run(arguments: Array(arguments.dropFirst(2)))
+        case "nemotron-qualification-replay":
+            await NemotronQualificationReplay.runCLI(arguments: Array(arguments.dropFirst(2)))
         case "nemotron-multilingual-benchmark":
             await NemotronMultilingualFleursBenchmark.runCLI(arguments: Array(arguments.dropFirst(2)))
         case "nemotron-vocab-benchmark":
@@ -162,6 +164,7 @@ struct FluidAudioCLI {
                 nemotron-benchmark      Run Nemotron 0.6B streaming ASR benchmark
                 nemotron-transcribe     Transcribe custom audio files with Nemotron
                 nemotron-multilingual-transcribe   Transcribe audio with Nemotron multilingual (local model path)
+                nemotron-qualification-replay      Replay real WAV audio causally with chunk timing and language observations
                 nemotron-multilingual-benchmark    Run Nemotron multilingual benchmark on FLEURS / MCV-17 / MLS (local model path)
                 nemotron-vocab-benchmark  Paired baseline-vs-biased custom vocabulary benchmark (earnings22-kws)
                 nemotron-multilingual-multi-stream-bench  Parallel multi-stream benchmark (N concurrent managers)
