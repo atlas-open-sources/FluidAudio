@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "agent": "claude",
+  "session_id": "299e826f-f0d6-4334-8c98-03ab0855ec57",
+  "project": "/Users/timapple/Documents/mcc/fujira/theforest/local-ai-cat/guests/voice-research-20261020/FluidAudio-cat/worktrees/export-qualification",
+  "first_observed_at": "2026-10-21T11:57:17.634887+00:00",
+  "started_at": "2026-10-21T11:57:17.634887+00:00",
+  "closed_at": "2026-10-21T11:59:57.517766+00:00",
+  "status": "closed",
+  "active_work_seconds": null,
+  "duration_basis": "observed wall-clock span; not active work",
+  "closeouts": [],
+  "machine": "timapple-m5",
+  "machines": [
+    "timapple-m5"
+  ],
+  "last_seen_at": "2026-10-21T11:59:57.517766+00:00",
+  "last_event": "SessionEnd",
+  "last_machine": "timapple-m5",
+  "outputs": {
+    "2026-10-21": {
+      "scratch": "/Users/timapple/Documents/mcc/fujira/theforest/local-ai-cat/guests/voice-research-20261020/FluidAudio-cat/worktrees/export-qualification/scratch/2026-10-21/045717-claude-8979afe1",
+      "artifacts": "/Users/timapple/Documents/mcc/fujira/theforest/local-ai-cat/guests/voice-research-20261020/FluidAudio-cat/worktrees/export-qualification/artifacts/2026-10-21/045717-claude-8979afe1"
+    }
+  },
+  "legacy_outputs": [],
+  "observed_span_seconds": 159.882879
+}
