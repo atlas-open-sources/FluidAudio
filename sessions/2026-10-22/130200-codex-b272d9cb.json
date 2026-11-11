@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "agent": "codex",
+  "session_id": "language-contracts-20261023",
+  "project": "/Users/timapple/Documents/mcc/fujira/theforest/local-ai-cat/guests/voice-research-20261020/FluidAudio-cat",
+  "first_observed_at": "2026-10-22T20:02:00.190144+00:00",
+  "started_at": null,
+  "closed_at": "2026-10-22T20:13:13.921006+00:00",
+  "status": "closed",
+  "active_work_seconds": null,
+  "duration_basis": "observed wall-clock span; not active work",
+  "closeouts": [
+    {
+      "at": "2026-10-22T20:13:13.921006+00:00",
+      "summary": "Language API and replay commits ready;56 focused tests pass with actual captured logit fixture. Kept clean worktree,patches,logs,hash receipts and report; real speculative quality remains open."
+    }
+  ],
+  "machine": "timapple-m5",
+  "machines": [
+    "timapple-m5"
+  ],
+  "last_seen_at": "2026-10-22T20:13:13.921006+00:00",
+  "last_event": "closeout",
+  "last_machine": "timapple-m5",
+  "outputs": {
+    "2026-10-22": {
+      "scratch": "/Users/timapple/Documents/mcc/fujira/theforest/local-ai-cat/guests/voice-research-20261020/FluidAudio-cat/scratch/2026-10-22/130200-codex-b272d9cb",
+      "artifacts": "/Users/timapple/Documents/mcc/fujira/theforest/local-ai-cat/guests/voice-research-20261020/FluidAudio-cat/artifacts/2026-10-22/130200-codex-b272d9cb"
+    }
+  },
+  "legacy_outputs": [],
+  "observed_span_seconds": 673.730862
+}

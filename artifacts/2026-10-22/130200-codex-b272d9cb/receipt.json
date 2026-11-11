@@ -1,0 +1,25 @@
+{
+  "base": "5770ec3",
+  "commits": [
+    "8dd7c85",
+    "a692cc3"
+  ],
+  "head": "a692cc3360382067b4c155e6e90a624bec8710c6",
+  "branch": "codex/language-contracts-20261023",
+  "worktree": "/Users/timapple/Documents/mcc/fujira/theforest/local-ai-cat/guests/voice-research-20261020/FluidAudio-cat/worktrees/language-contracts",
+  "final_binary": "/Users/timapple/Documents/mcc/fujira/theforest/local-ai-cat/guests/voice-research-20261020/FluidAudio-cat/worktrees/language-contracts/.build/debug/fluidaudiocli",
+  "final_binary_sha256": "3c91adb1f9aa857f8d4835227687cb5c9fb119009a758a43bb49f5e43179740a",
+  "test_command": "FLUIDAUDIO_LANGUAGE_LOGITS_FIXTURE=<actual-real-logits.json> swift test --jobs 4 -Xswiftc -DQUALIFICATION_FORK --filter NemotronLanguageObservationTests|NemotronMultilingualTests|NemotronQualificationReplayTests",
+  "tests_passed": 56,
+  "tests_skipped": 0,
+  "quality_claim": false,
+  "format_warnings": [
+    "Inherited uppercase K in manager:680",
+    "Inherited uppercase K in Decode:57"
+  ],
+  "real_capture_receipt": "real-logit-receipt.json",
+  "test_log": "final-contract-tests.log",
+  "build_log": "final-build.log",
+  "app_edits": false,
+  "external_submissions": false
+}

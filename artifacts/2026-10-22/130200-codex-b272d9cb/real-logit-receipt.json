@@ -1,0 +1,32 @@
+{
+  "capture": "temporary instrumented actual runtime decode, then instrumentation removed",
+  "audio": "/Users/timapple/Documents/mcc/fujira/theforest/local-ai-cat/artifacts/2026-10-21/024634-codex-b56144cc/corpus/en_us/en_us_0305.wav",
+  "audio_sha256": "515c1e5dcc00956df2d0a7491562070d2c7955005af482e90a8aa96820479592",
+  "model_directory": "/Users/timapple/Library/Application Support/FluidAudio/Models/nemotron-multilingual/multilingual/1120ms",
+  "logits_sha256": "fb29296b46fdb9f926e123f6362ea54c60d0a9b3b6c342372c7c3e77e467ad50",
+  "instrumented_binary_sha256": "e126f8eb6abee640c8d9c59188fcde55e437ed54dcf0956151544d50515f4b92",
+  "model_files": {
+    "decoder.mlmodelc/analytics/coremldata.bin": "fdb14a08e42b4806a2d1505501586be71e4f04ca9256c719544fd7ed6937e509",
+    "decoder.mlmodelc/coremldata.bin": "6d13f9f434a2485bf9bac16e353f0c2ea850ec5a98e44effc33bfe17da8559d5",
+    "decoder.mlmodelc/model.mil": "f3ed3e9cac9b70e1b00df48b53868dbd3c4dd8cf158af79ded0d05a96e0bf5dc",
+    "decoder.mlmodelc/weights/weight.bin": "dcdeccd4ccf46e2675224f9f030d46c1a89e2bda4abb316e901e1a21f1597f8f",
+    "decoder_joint.mlmodelc/analytics/coremldata.bin": "8a8e98a54ed1f16c3d5125816a002b991e167d620beb8fcc557f26d9a1c092f8",
+    "decoder_joint.mlmodelc/coremldata.bin": "0cf3b4fe7bc448f822058c9de3e9fdc72f6277fb72f77836535c829ae3058d0a",
+    "decoder_joint.mlmodelc/model.mil": "62144df8c1928d571c1df508a576f2d574a6bd6b1f2dba7f3f15cf9605805d6a",
+    "decoder_joint.mlmodelc/weights/weight.bin": "01f21eb747fbc53bd0ed7efebea1bf0aa655ebf2816f21d0bb6554c9b7fcfc0b",
+    "encoder.mlmodelc/analytics/coremldata.bin": "5488ed81fa1e370dd5411218d9b0e0562d01ca33c45b9ea1935bab6c8e8dc943",
+    "encoder.mlmodelc/coremldata.bin": "93d7f1b6412b965b379f3359e38f9c4330099b5b41f9d30b85bf7286b098a78d",
+    "encoder.mlmodelc/model.mil": "a6341253a353e57d546060d5a2add769229be06781200216be866d6cdecb382a",
+    "encoder.mlmodelc/weights/weight.bin": "e3dbd37659c7ef51d2dc691afac42fbdd1f04998fa62816ff0f2eebec5cc3d01",
+    "joint.mlmodelc/analytics/coremldata.bin": "a1a90a7d5f8b86f564a42ab45b42a43eb0bbce6682176916bd94591b28cca447",
+    "joint.mlmodelc/coremldata.bin": "15415f76583ac18c78be1a4192aad2023432acd9095baf4862b86e5122cf0958",
+    "joint.mlmodelc/model.mil": "521da827005ddcf3fbd439d12f85c34b1273642635b39a87bfbc931131cd3bf6",
+    "joint.mlmodelc/weights/weight.bin": "c0ef0a3a6598f962d2aad598dc6850e4428874033419817121e11f1fff4a9cfe",
+    "metadata.json": "2c713772449c61549cc32b29ba7a91a2c9a7e30fa61521bdc672fb35cfb31572",
+    "preprocessor.mlmodelc/analytics/coremldata.bin": "265c27d899f10ef55d65912885b59e3420ba752d15009a925a1167db666792da",
+    "preprocessor.mlmodelc/coremldata.bin": "3d1aa8c8e7e283e4944af4b0b701db760ed99ef14919d3f989c599b9f63335a2",
+    "preprocessor.mlmodelc/model.mil": "12637d7ddfabea2d58e6b7986699c1be7fe970dc589eeac52fcb9ad25ae06ec9",
+    "preprocessor.mlmodelc/weights/weight.bin": "297514e2b211d14b0e53cb97193d679bb89ead98d28e578f3f1d049ddbcc36b3",
+    "tokenizer.json": "fb70c8fcb6472cda2bdb799b156a8941e72762344a7c636d3b1275f1d53c4a6b"
+  }
+}
