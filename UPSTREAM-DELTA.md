@@ -48,7 +48,14 @@ API the Cat uses was removed or renamed. Behaviour changes on paths the Cat call
 - **Offline diarizer keeps overlapping speech by default** (d28bde8d, #1081): `OfflineDiarizerConfig.default`
   now has `exclusiveSegments = false`. The Cat attributes each word to one speaker, so its pin branch sets
   `exclusiveSegments = true` explicitly (behaviour unchanged, with a test).
-- Offline diarizer: pyannote-parity clustering (df1417ce), speaker caps (3ebb2859), silent frames excluded from the
+- **Offline diarizer clustering threshold changed meaning** (df1417ce, #802; first bad commit by `git bisect`
+  over v0.15.5..v0.18.3): the threshold is now the dendrogram cut itself, where 0.15.5 cut at
+  `sqrt(2 - 2 * threshold)`. With the default 0.6 applied directly, the Cat's committed AMI clip
+  (`ami-es2004a-multispeaker-16k.wav`, 75 s, 2 speakers) diarizes as ONE speaker (`fluidaudiocli process --mode
+  offline`: d116b79 7 segments / 2 speakers, v0.18.3 6 / 1). With the cut set to `sqrt(2 - 2 * 0.6)` v0.18.3 gives
+  the same 7 segments and 2 speakers as d116b79, segment for segment. The Cat's pin branch sets that cut (red test
+  first). Adopting upstream's pyannote-parity default needs the speech-bench comparison.
+- Offline diarizer: speaker caps (3ebb2859), silent frames excluded from the
   FBank mean (3e5a323b), short spans tiled (a5f70903), cancellation propagated (ce9f85e5), batched embeddings.
 - Sortformer: streaming mel no longer emits phantom frames that drifted timestamps late (baa11f65); complete audio
   gets a prediction for every frame (41c53ce4).
@@ -85,3 +92,7 @@ Transcribe Lite, LS-EEND / Nemotron-3 diarization, Kokoro ANE / Pocket TTS / Pho
 - Note: upstream's suite downloads models on first run (parakeet-ja, campplus, a Sortformer high-latency bundle,
   LS-EEND ami, online pyannote/wespeaker). They were removed from the shared cache after the run except the small
   online diarization files inside `speaker-diarization`.
+- Known gap (Codex review): `CtcModels.scaledProgressHandler` (new upstream, custom-vocabulary word spotting)
+  rebuilds `DownloadProgress` from fraction and phase only, so `completedBytes`/`totalBytes` are nil on that path.
+  The Cat does not call `CtcModels`; ModelHub's ProgressReporter path carries the bytes.
+- The Cat pins `d94f4ee7` (code identical to this commit's parent chain); later commits on this branch are docs.
