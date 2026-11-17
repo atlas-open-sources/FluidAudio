@@ -375,3 +375,23 @@ final class ANEMemoryUtilsEdgeCaseTests: XCTestCase {
         }
     }
 }
+
+#if compiler(>=6.2)
+extension ANEMemoryUtilsEdgeCaseTests {
+    @available(macOS 26, iOS 26, *)
+    func testInt8ElementSizeMatchesStorage() {
+        XCTAssertEqual(ANEMemoryUtils.getElementSize(for: .int8), MemoryLayout<Int8>.stride)
+    }
+
+    @available(macOS 26, iOS 26, *)
+    func testInt8ViewOffsetUsesBytesNotFloatWidth() throws {
+        let source = try MLMultiArray(shape: [64], dataType: .int8)
+        for index in 0..<64 { source[index] = NSNumber(value: index - 32) }
+        let view = try ANEMemoryUtils.createZeroCopyView(from: source, offset: 1, shape: [1], strides: [1])
+        // Keep the source alive: this test exercises offset arithmetic, not ownership.
+        withExtendedLifetime(source) {
+            XCTAssertEqual(view[0].intValue, -31)
+        }
+    }
+}
+#endif
