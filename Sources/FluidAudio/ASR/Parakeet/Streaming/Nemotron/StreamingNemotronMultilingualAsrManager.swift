@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 @preconcurrency import CoreML
 import Foundation
@@ -827,6 +828,7 @@ public actor StreamingNemotronMultilingualAsrManager {
         firstDetectedLanguage = nil
         vocabularyBias?.resetMatchState()
         currentDetectedLanguageValue = nil
+        softLanguageEvidence.reset()
         do {
             try resetStates()
         } catch {
@@ -1136,6 +1138,16 @@ public actor StreamingNemotronMultilingualAsrManager {
     /// Internal setter used by the pipeline when it encounters a lang-tag
     /// token in the decoder output.
     internal func recordDetectedLanguage(_ language: String) {
+        // Rescue replays older audio; it must not alter live language attribution.
+        guard !inBlankRescue else { return }
+        // An expected-languages allowlist (if set) objectively rejects a tag
+        // outside it — a momentary misdetection (e.g. a one-frame "tr-TR" in an
+        // en/es conversation) is dropped here, not merely smoothed by debounce.
+        if let allowed = expectedPrimaryLanguages,
+            !allowed.contains(Self.primarySubtag(language))
+        {
+            return
+        }
         if firstDetectedLanguage == nil {
             firstDetectedLanguage = language
         }
@@ -1147,9 +1159,275 @@ public actor StreamingNemotronMultilingualAsrManager {
 
     private var currentDetectedLanguageValue: String?
 
+    /// Optional allowlist of expected PRIMARY language subtags (e.g. `["en","es"]`)
+    /// for the session. When set, any detected language outside it is ignored by
+    /// BOTH the discrete (`recordDetectedLanguage`) and soft (`recordSoftLanguage`)
+    /// paths — an objective anomaly filter that complements the debounce. `nil`
+    /// (the default) accepts every language. Survives per-turn `reset()`.
+    private var expectedPrimaryLanguages: Set<String>?
+
+    /// Set (or clear, with `nil`/empty) the expected-language allowlist. Values
+    /// are normalized to primary subtags, so `"en-US"`, `"en"` and `"eng"` all
+    /// constrain to English.
+    public func setExpectedLanguages(_ languages: Set<String>?) {
+        guard let languages, !languages.isEmpty else {
+            expectedPrimaryLanguages = nil
+            return
+        }
+        expectedPrimaryLanguages = Set(languages.map(Self.primarySubtag))
+    }
+
     /// The MOST RECENT language-tag piece (e.g. `"es-419"`) emitted by the decoder
     /// this session, vs `detectedLanguage()` which is the FIRST. Because the model
     /// re-detects language mid-stream, comparing this to the turn's opening
     /// language is a precise, model-native signal for a speaker language switch.
     public func currentDetectedLanguage() -> String? { currentDetectedLanguageValue }
+
+    // MARK: - Soft (early) language detection
+
+    /// Largest distance (in logits, i.e. nats) the best lang-tag logit may sit
+    /// below the frame's full-vocab maximum for the frame to count as a language
+    /// reading at all. `softLanguagePick` renormalizes over the lang tags ONLY, so
+    /// it reports a confident winner even when the model gives every tag
+    /// essentially zero probability. On the multilingual 1120 ms export some
+    /// decode steps come out of the operating range entirely (full-vocab max
+    /// around -900 instead of -13…-85) and there the tag ranking is a fixed
+    /// artefact: `sl-SL` wins with softmax "confidence" 1.000 on every such frame,
+    /// whatever the audio. Measured on the EN/ES bilingual sample (246 readings):
+    /// every in-range frame had a gap of 16.6–49 nats, every degenerate one
+    /// 70–98.5, nothing in between. 60 sits in that empty band. The gap is
+    /// softmax-invariant (a constant shift of all logits does not move it), which
+    /// an absolute logit floor would not be.
+    static let softLanguageMaxTagGap: Float = 60
+
+    /// Lazily-built map: lang-tag token id → its language piece (e.g. 397 → "es-419").
+    /// Model-static, so it survives `reset()`.
+    private var langTagIdToLanguageCache: [Int: String]?
+    /// Accumulated per-language evidence from in-range soft readings this turn.
+    private var softLanguageEvidence = SoftLanguageEvidence()
+
+    private static func primarySubtag(_ code: String) -> String {
+        let normalized = code.replacingOccurrences(of: "_", with: "-")
+        return normalized.split(separator: "-").first.map { $0.lowercased() } ?? normalized.lowercased()
+    }
+
+    private func langTagIdToLanguage(_ tokenizer: NemotronMultilingualTokenizer) -> [Int: String] {
+        if let cached = langTagIdToLanguageCache { return cached }
+        var map: [Int: String] = [:]
+        for id in config.langTagTokenIds {
+            if let piece = tokenizerPiece(forId: id, tokenizer: tokenizer) {
+                map[id] = NemotronMultilingualTokenizer.stripAngleBrackets(piece)
+            }
+        }
+        langTagIdToLanguageCache = map
+        return map
+    }
+
+    /// Read the model's language BELIEF from a decode step's logits — the argmax
+    /// over JUST the lang-tag tokens, softmax-gated and debounced — and record it
+    /// as the current language. Unlike `recordDetectedLanguage`, which fires only
+    /// when a lang-tag token wins the FULL-vocab argmax (rare, and only near a
+    /// segment's end), this surfaces the language from the first frames of speech:
+    /// the model's relative preference *among the lang tags* is present in the
+    /// logits long before it actually emits the tag token.
+    ///
+    /// Confidence is computed on PRIMARY-subtag mass (so "en-US"/"en"/"en-GB"
+    /// reinforce each other instead of splitting the vote). `logits` is one
+    /// decode step's full-vocab logits (flat, index == token id, float32 — the
+    /// same layout `findMaxIndex` assumes). No-op for a fused argmax-only path
+    /// (no logits) or non-float32 logits.
+    internal func recordSoftLanguage(
+        fromLogits logits: MLMultiArray, tokenizer: NemotronMultilingualTokenizer
+    ) {
+        let map = langTagIdToLanguage(tokenizer)
+        guard !map.isEmpty, logits.dataType == .float32 else { return }
+        let count = logits.count
+        let ptr = logits.dataPointer.bindMemory(to: Float.self, capacity: count)
+
+        var candidates: [(piece: String, logit: Float)] = []
+        candidates.reserveCapacity(map.count)
+        for (id, piece) in map where id < count {
+            candidates.append((piece, ptr[id]))
+        }
+        var frameMax = -Float.infinity
+        vDSP_maxv(ptr, 1, &frameMax, vDSP_Length(count))
+        applySoftLanguage(candidates: candidates, frameMaxLogit: frameMax)
+    }
+
+    /// Same soft reading, but for one frame of a batched `[1, K, 1, V]` logits
+    /// array (the smart-speculative path's layout) — handles fp16/fp32 and
+    /// arbitrary strides. `frame` is the index along the K axis. Without this the
+    /// speculative path (used by model exports that ship
+    /// `joint_noencproj_batched`) would never surface the early soft language.
+    internal func recordSoftLanguage(
+        fromBatchedLogits logits: MLMultiArray, frame: Int,
+        tokenizer: NemotronMultilingualTokenizer
+    ) {
+        let map = langTagIdToLanguage(tokenizer)
+        guard !map.isEmpty else { return }
+        let vocab = logits.shape[3].intValue
+        let stride0 = logits.strides[0].intValue
+        let stride1 = logits.strides[1].intValue
+        let stride2 = logits.strides[2].intValue
+        let stride3 = logits.strides[3].intValue
+        let base = 0 * stride0 + frame * stride1 + 0 * stride2
+        let isF16 = (logits.dataType == .float16)
+        let f16 =
+            isF16 ? logits.dataPointer.bindMemory(to: UInt16.self, capacity: logits.count) : nil
+        let f32 =
+            isF16 ? nil : logits.dataPointer.bindMemory(to: Float.self, capacity: logits.count)
+
+        var candidates: [(piece: String, logit: Float)] = []
+        candidates.reserveCapacity(map.count)
+        for (id, piece) in map where id < vocab {
+            let value =
+                isF16 ? nemotronHalfBitsToFloat(f16![base + id * stride3]) : f32![base + id * stride3]
+            candidates.append((piece, value))
+        }
+        var frameMax = -Float.infinity
+        for id in 0..<vocab {
+            let value =
+                isF16 ? nemotronHalfBitsToFloat(f16![base + id * stride3]) : f32![base + id * stride3]
+            if value > frameMax { frameMax = value }
+        }
+        applySoftLanguage(candidates: candidates, frameMaxLogit: frameMax)
+    }
+
+    /// Shared tail of both soft readers: read the frame (range gate + allowlist),
+    /// fold it into the turn's evidence, and record the language the evidence
+    /// has committed to, if any.
+    internal func applySoftLanguage(
+        candidates: [(piece: String, logit: Float)], frameMaxLogit: Float
+    ) {
+        guard !inBlankRescue else { return }
+        guard
+            let frame = Self.softLanguageFrame(
+                from: candidates, frameMaxLogit: frameMaxLogit, allowed: expectedPrimaryLanguages),
+            let primary = softLanguageEvidence.observe(frame.distribution)
+        else { return }
+        let piece = frame.bestPiece[primary] ?? primary
+        if firstDetectedLanguage == nil { firstDetectedLanguage = piece }
+        currentDetectedLanguageValue = piece
+    }
+
+    /// One decode step's language reading, pure so it is testable without a
+    /// model: the softmax mass per PRIMARY language over the (allowlisted) lang
+    /// tags, plus the best-scoring piece within each primary. Nil when the frame
+    /// is out of range (see `softLanguageMaxTagGap`), non-finite, or the
+    /// allowlist leaves nothing. `frameMaxLogit` is the maximum over the frame's
+    /// FULL vocabulary (blank included), not just the lang tags.
+    static func softLanguageFrame(
+        from candidates: [(piece: String, logit: Float)],
+        frameMaxLogit: Float,
+        allowed: Set<String>? = nil
+    ) -> (distribution: [String: Float], bestPiece: [String: String])? {
+        guard frameMaxLogit.isFinite,
+            let tagMax = candidates.map(\.logit).max(), tagMax.isFinite,
+            frameMaxLogit - tagMax <= softLanguageMaxTagGap
+        else { return nil }
+        let pool: [(piece: String, logit: Float)]
+        if let allowed, !allowed.isEmpty {
+            pool = candidates.filter { allowed.contains(primarySubtag($0.piece)) && $0.logit.isFinite }
+        } else {
+            pool = candidates.filter { $0.logit.isFinite }
+        }
+        guard let poolMax = pool.map(\.logit).max() else { return nil }
+        var mass: [String: Float] = [:]
+        var best: [String: (piece: String, logit: Float)] = [:]
+        var total: Float = 0
+        for candidate in pool {
+            let primary = primarySubtag(candidate.piece)
+            let weight = expf(candidate.logit - poolMax)
+            total += weight
+            mass[primary, default: 0] += weight
+            if let current = best[primary], current.logit >= candidate.logit { continue }
+            best[primary] = candidate
+        }
+        guard total > 0 else { return nil }
+        return (mass.mapValues { $0 / total }, best.mapValues(\.piece))
+    }
+
+    /// Pure pick over `(langTagPiece, logit)` pairs: the dominant PRIMARY language
+    /// by aggregated softmax mass (so "en-US"/"en"/"en-GB" reinforce rather than
+    /// split the vote), the best-scoring piece within it, and that primary's mass
+    /// fraction as confidence. Returns nil for an empty set. Separated from the
+    /// CoreML buffer read so the gating math is unit-testable without a model.
+    ///
+    /// `allowed` (primary subtags) restricts the vote to expected languages —
+    /// anomalies outside it are dropped BEFORE the softmax, so they neither win
+    /// nor dilute the confidence of the real answer. `nil`/empty = accept all.
+    static func softLanguagePick(
+        from candidates: [(piece: String, logit: Float)],
+        allowed: Set<String>? = nil
+    ) -> (piece: String, primary: String, confidence: Float)? {
+        let pool: [(piece: String, logit: Float)]
+        if let allowed, !allowed.isEmpty {
+            pool = candidates.filter { allowed.contains(primarySubtag($0.piece)) }
+        } else {
+            pool = candidates
+        }
+        guard let maxLogit = pool.map(\.logit).max() else { return nil }
+        var massByPrimary: [String: Float] = [:]
+        var bestPieceByPrimary: [String: (piece: String, logit: Float)] = [:]
+        var total: Float = 0
+        for candidate in pool {
+            let primary = primarySubtag(candidate.piece)
+            total += expf(candidate.logit - maxLogit)
+            massByPrimary[primary, default: 0] += expf(candidate.logit - maxLogit)
+            if let current = bestPieceByPrimary[primary] {
+                if candidate.logit > current.logit {
+                    bestPieceByPrimary[primary] = (candidate.piece, candidate.logit)
+                }
+            } else {
+                bestPieceByPrimary[primary] = (candidate.piece, candidate.logit)
+            }
+        }
+        guard total > 0,
+            let bestPrimary = massByPrimary.max(by: { $0.value < $1.value })?.key
+        else { return nil }
+        let piece = bestPieceByPrimary[bestPrimary]?.piece ?? bestPrimary
+        return (piece, bestPrimary, (massByPrimary[bestPrimary] ?? 0) / total)
+    }
+}
+
+/// Leaky per-language evidence over a turn's soft language readings — the rule
+/// that decides when the live language is committed or flips.
+///
+/// It replaces "two consecutive frames at >= 0.45 on the same language", which
+/// read single decode steps as verdicts. On the EN/ES bilingual sample the
+/// model's per-frame belief in open auto-detect bursts to a wrong language for
+/// 2–4 frames at 0.6–0.98 (`th` at a turn's first frames, `nn` and `hi` inside
+/// clearly Spanish speech), and every such burst passed the old debounce. Here
+/// each in-range frame's distribution is folded into an exponentially decaying
+/// share per language, and a language is committed only once its share reaches
+/// `commitShare`. A burst of four confident wrong frames inside a steady
+/// language stays below it; a sustained switch crosses it in about seven frames
+/// (~0.5 s at the multilingual model's decode rate). Shares sum to at most 1, so
+/// at most one language can hold `commitShare` at a time — no tie-break needed.
+struct SoftLanguageEvidence {
+    /// Weight the accumulated share keeps per frame (the leak).
+    static let retention: Float = 0.85
+    /// Accumulated share a language needs before it is committed.
+    static let commitShare: Float = 0.5
+
+    private(set) var share: [String: Float] = [:]
+
+    /// Fold one frame's per-primary distribution in. Returns the committed
+    /// primary language, or nil while no language has enough evidence.
+    mutating func observe(_ distribution: [String: Float]) -> String? {
+        for key in share.keys {
+            share[key, default: 0] *= Self.retention
+        }
+        for (primary, mass) in distribution {
+            share[primary, default: 0] += (1 - Self.retention) * mass
+        }
+        guard let leader = share.max(by: { $0.value < $1.value }),
+            leader.value >= Self.commitShare
+        else { return nil }
+        return leader.key
+    }
+
+    mutating func reset() {
+        share.removeAll()
+    }
 }
