@@ -84,6 +84,7 @@ let package = Package(
                 "FluidAudioCLI",
             ],
             resources: [
+                .copy("ASR/Parakeet/SlidingWindow/CTC/sample_medical.arpa"),
                 .process("TTS/LuxTts/Resources"),
                 .process("TTS/PocketTTS/Fixtures"),
                 // Real recordings (cleared for public release by the speaker) for the
